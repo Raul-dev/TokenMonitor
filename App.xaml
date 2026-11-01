@@ -1,0 +1,7 @@
+﻿<Application x:Class="TokenMonitor.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:TokenMonitor">
+    <Application.Resources>
+    </Application.Resources>
+</Application>
