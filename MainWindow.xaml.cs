@@ -17,6 +17,7 @@ public partial class MainWindow : Window
 
     readonly DataStore store = new();
     readonly CursorStore cursorStore;
+    readonly DevinStore devinStore;
     readonly AppSettings settings;
     readonly BudgetService budgetService;
     readonly DispatcherTimer timer;
@@ -24,6 +25,7 @@ public partial class MainWindow : Window
     DataSnapshot? snapshot;
     BudgetInfo? budget;
     CursorPeriodUsage? cursorPeriod;
+    DevinSnapshot? devinSnapshot;
     DateTime lastBudgetFetch = DateTime.MinValue;
     DateTime lastCursorPeriodFetch = DateTime.MinValue;
     List<Node> roots = new();
@@ -31,16 +33,17 @@ public partial class MainWindow : Window
     long signature;
     string liveKey = string.Empty;
     bool busy;
-    string currentSource = "OpenCode";
+    DataSource currentSource = DataSource.OpenCode;
 
     public MainWindow()
     {
         InitializeComponent();
 
         settings = SettingsStore.Load();
-        currentSource = settings.LastSource ?? "OpenCode";
+        currentSource = settings.LastSource;
         budgetService = new BudgetService(settings);
         cursorStore = new CursorStore(settings);
+        devinStore = new DevinStore(settings);
         SettingsStore.EnsureExists(settings);
 
         LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
@@ -50,8 +53,13 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
-            UpdateTabStyle();
-            DbPathText.Text = currentSource == "OpenCode" ? store.DbPath : cursorStore.EventsPath;
+            UpdateComboBoxSelection();
+            DbPathText.Text = currentSource switch
+            {
+                DataSource.OpenCode => store.DbPath,
+                DataSource.Cursor => cursorStore.EventsPath,
+                _ => devinStore.IsConfigured ? $"Devin API v3 (org: {settings.DevinOrgId})" : "Devin API не настроен"
+            };
             await RefreshAsync();
             timer.Start();
         };
@@ -73,13 +81,46 @@ public partial class MainWindow : Window
         try
         {
             DataSnapshot loaded;
-            if (currentSource == "OpenCode")
+            if (currentSource == DataSource.OpenCode)
             {
-                loaded = await Task.Run(store.Load);
+                try
+                {
+                    loaded = await Task.Run(store.Load);
+                }
+                catch (FileNotFoundException)
+                {
+                    loaded = new DataSnapshot
+                    {
+                        Sessions = new List<SessionData>(),
+                        Live = new List<LiveEvent>(),
+                        Signature = 0,
+                        DbPath = store.DbPath,
+                        EventsPath = string.Empty,
+                        LoadedAt = DateTime.Now,
+                    };
+                    StatusText.Text = "База opencode не найдена. Запустите opencode и выполните хотя бы один запрос.";
+                }
+            }
+            else if (currentSource == DataSource.Cursor)
+            {
+                loaded = await cursorStore.LoadAsync(refreshRemote: true);
+            }
+            else if (currentSource == DataSource.Devin)
+            {
+                devinSnapshot = await devinStore.LoadAsync();
+                loaded = DevinStore.ToDataSnapshot(devinSnapshot);
             }
             else
             {
-                loaded = await cursorStore.LoadAsync(refreshRemote: true);
+                loaded = new DataSnapshot
+                {
+                    Sessions = new List<SessionData>(),
+                    Live = new List<LiveEvent>(),
+                    Signature = 0,
+                    DbPath = "Claude - не реализовано",
+                    EventsPath = string.Empty,
+                    LoadedAt = DateTime.Now,
+                };
             }
 
             snapshot = loaded;
@@ -95,9 +136,21 @@ public partial class MainWindow : Window
             UpdateKpi();
 
             var requests = loaded.Sessions.Sum(s => s.Requests.Count);
-            StatusText.Text = $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
+            if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
+            {
+                // Keep the error message
+            }
+            else
+            {
+                StatusText.Text = $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
+            }
 
-            if (currentSource == "OpenCode")
+            if (currentSource == DataSource.OpenCode && loaded.Sessions.Count == 0 && File.Exists(store.DbPath))
+            {
+                StatusText.Text = "База opencode пуста. Запустите opencode и выполните хотя бы один запрос.";
+            }
+
+            if (currentSource == DataSource.OpenCode)
             {
                 if (budget is null || (DateTime.UtcNow - lastBudgetFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
                 {
@@ -106,7 +159,7 @@ public partial class MainWindow : Window
                     UpdateBudgetUi();
                 }
             }
-            else
+            else if (currentSource == DataSource.Cursor)
             {
                 if (cursorPeriod is null || (DateTime.UtcNow - lastCursorPeriodFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
                 {
@@ -114,6 +167,15 @@ public partial class MainWindow : Window
                     cursorPeriod = await cursorStore.GetPeriodAsync();
                     UpdateCursorBudgetUi();
                 }
+            }
+            else if (currentSource == DataSource.Devin)
+            {
+                UpdateDevinBudgetUi();
+            }
+            else
+            {
+                BudgetText.Text = "—";
+                BudgetDetail.Text = "Claude не реализован";
             }
         }
         catch (Exception error)
@@ -298,9 +360,15 @@ public partial class MainWindow : Window
 
     void UpdateBudgetUi()
     {
-        if (currentSource == "Cursor")
+        if (currentSource == DataSource.Cursor)
         {
             UpdateCursorBudgetUi();
+            return;
+        }
+
+        if (currentSource == DataSource.Devin)
+        {
+            UpdateDevinBudgetUi();
             return;
         }
 
@@ -382,7 +450,70 @@ public partial class MainWindow : Window
         BudgetDetail.ToolTip = tooltip;
     }
 
+    void UpdateDevinBudgetUi()
+    {
+        if (devinSnapshot is null) return;
+
+        if (devinSnapshot.UsageMetrics?.Error is not null)
+        {
+            BudgetText.Text = "—";
+            BudgetText.Foreground = BudgetMuted;
+            BudgetDetail.Text = devinSnapshot.UsageMetrics.Error;
+            BudgetText.ToolTip = devinSnapshot.UsageMetrics.Error;
+            BudgetDetail.ToolTip = devinSnapshot.UsageMetrics.Error;
+            return;
+        }
+
+        var usage = devinSnapshot.UsageMetrics;
+        var sessions = usage?.SessionsCount ?? 0;
+        BudgetText.Text = sessions.ToString();
+
+        BudgetText.Foreground = BudgetNormal;
+
+        var details = new List<string>();
+        if (usage?.PrsCreatedCount > 0)
+            details.Add($"PRs: {usage.PrsCreatedCount}");
+        if (usage?.PrsMergedCount > 0)
+            details.Add($"merged: {usage.PrsMergedCount}");
+        if (usage?.SearchesCount > 0)
+            details.Add($"searches: {usage.SearchesCount}");
+        BudgetDetail.Text = details.Count > 0 ? string.Join(" · ", details) : "сессий за месяц";
+
+        var tooltip = $"Сессий: {sessions}";
+        if (devinSnapshot.SessionMetrics?.AvgAcusPerSession > 0)
+            tooltip += $"\nСреднее ACU/сессия: {devinSnapshot.SessionMetrics.AvgAcusPerSession:0.0}";
+        if (devinSnapshot.CategoryMetrics?.Categories.Count > 0)
+            tooltip += $"\nКатегорий: {devinSnapshot.CategoryMetrics.Categories.Count}";
+        tooltip += "\nисточник: Devin API v3";
+
+        BudgetText.ToolTip = tooltip;
+        BudgetDetail.ToolTip = tooltip;
+    }
+
     void ConfigLink_Click(object sender, RoutedEventArgs e)
+    {
+        SettingsStore.EnsureExists(settings);
+
+        var configPath = currentSource switch
+        {
+            DataSource.OpenCode => settings.ConfigOpenCode,
+            DataSource.Cursor => settings.ConfigCursor,
+            DataSource.Claude => settings.ConfigClaude,
+            DataSource.Devin => settings.ConfigDevin,
+            _ => SettingsStore.SettingsPath
+        };
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(configPath) { UseShellExecute = true });
+        }
+        catch (Exception error)
+        {
+            StatusText.Text = $"не удалось открыть конфиг: {error.Message}";
+        }
+    }
+
+    void SourceConfigLink_Click(object sender, RoutedEventArgs e)
     {
         SettingsStore.EnsureExists(settings);
 
@@ -573,49 +704,49 @@ public partial class MainWindow : Window
         }
     }
 
-    async void OpenCodeTab_Click(object sender, RoutedEventArgs e)
+    async void SourceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (currentSource == "OpenCode") return;
-        currentSource = "OpenCode";
-        settings.LastSource = "OpenCode";
-        SettingsStore.TrySave(settings);
-        UpdateTabStyle();
-        lastBudgetFetch = DateTime.MinValue;
-        signature = 0;
-        DbPathText.Text = store.DbPath;
-        TreeHint.Text = "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.";
-        await RefreshAsync();
-    }
+        if (SourceComboBox.SelectedItem is not ComboBoxItem item || item.Tag is not string tag) return;
 
-    async void CursorTab_Click(object sender, RoutedEventArgs e)
-    {
-        if (currentSource == "Cursor") return;
-        currentSource = "Cursor";
-        settings.LastSource = "Cursor";
+        if (!Enum.TryParse<DataSource>(tag, out var newSource)) return;
+        if (newSource == currentSource) return;
+
+        currentSource = newSource;
+        settings.LastSource = newSource;
         SettingsStore.TrySave(settings);
-        UpdateTabStyle();
+
+        lastBudgetFetch = DateTime.MinValue;
         lastCursorPeriodFetch = DateTime.MinValue;
         signature = 0;
-        DbPathText.Text = cursorStore.EventsPath;
-        TreeHint.Text = "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.";
+
+        DbPathText.Text = currentSource switch
+        {
+            DataSource.OpenCode => store.DbPath,
+            DataSource.Cursor => cursorStore.EventsPath,
+            DataSource.Devin => devinStore.IsConfigured ? $"Devin API v3 (org: {settings.DevinOrgId})" : "Devin API не настроен",
+            _ => "Claude - не реализовано"
+        };
+
+        TreeHint.Text = currentSource switch
+        {
+            DataSource.OpenCode => "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.",
+            DataSource.Cursor => "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.",
+            DataSource.Devin => "Статистика использования Devin API v3. Настройте API ключ и Org ID в конфиге.",
+            _ => "Claude - не реализовано"
+        };
+
         await RefreshAsync();
     }
 
-    void UpdateTabStyle()
+    void UpdateComboBoxSelection()
     {
-        if (currentSource == "OpenCode")
+        foreach (ComboBoxItem item in SourceComboBox.Items)
         {
-            OpenCodeTab.Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
-            OpenCodeTab.Foreground = new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x27));
-            CursorTab.Background = Brushes.Transparent;
-            CursorTab.Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80));
-        }
-        else
-        {
-            CursorTab.Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
-            CursorTab.Foreground = new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x27));
-            OpenCodeTab.Background = Brushes.Transparent;
-            OpenCodeTab.Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80));
+            if (item.Tag is string tag && Enum.TryParse<DataSource>(tag, out var source) && source == currentSource)
+            {
+                SourceComboBox.SelectedItem = item;
+                break;
+            }
         }
     }
 }

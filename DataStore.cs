@@ -36,7 +36,20 @@ public sealed class DataStore
 
     public DataSnapshot Load()
     {
-        var sessions = LoadSessions();
+        List<SessionData> sessions;
+        try
+        {
+            sessions = LoadSessions();
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            sessions = new List<SessionData>();
+        }
+        catch (Exception)
+        {
+            sessions = new List<SessionData>();
+        }
+
         return new DataSnapshot
         {
             Sessions = sessions,
@@ -220,32 +233,43 @@ public sealed class DataStore
 
     long ComputeSignature()
     {
-        using var connection = Open();
-        var result = 17L;
-
-        using (var command = connection.CreateCommand())
+        try
         {
-            command.CommandText = "SELECT IFNULL(MAX(time_updated), 0), COUNT(*) FROM message";
-            using var reader = command.ExecuteReader();
-            if (reader.Read())
-            {
-                result = result * 31 + reader.GetInt64(0);
-                result = result * 31 + reader.GetInt64(1);
-            }
-        }
+            using var connection = Open();
+            var result = 17L;
 
-        using (var command = connection.CreateCommand())
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT IFNULL(MAX(time_updated), 0), COUNT(*) FROM message";
+                using var reader = command.ExecuteReader();
+                if (reader.Read())
+                {
+                    result = result * 31 + reader.GetInt64(0);
+                    result = result * 31 + reader.GetInt64(1);
+                }
+            }
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT IFNULL(MAX(time_updated), 0), COUNT(*) FROM session";
+                using var reader = command.ExecuteReader();
+                if (reader.Read())
+                {
+                    result = result * 31 + reader.GetInt64(0);
+                    result = result * 31 + reader.GetInt64(1);
+                }
+            }
+
+            return result;
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
         {
-            command.CommandText = "SELECT IFNULL(MAX(time_updated), 0), COUNT(*) FROM session";
-            using var reader = command.ExecuteReader();
-            if (reader.Read())
-            {
-                result = result * 31 + reader.GetInt64(0);
-                result = result * 31 + reader.GetInt64(1);
-            }
+            return 0;
         }
-
-        return result;
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     List<LiveEvent> LoadLive()

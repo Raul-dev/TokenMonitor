@@ -95,7 +95,7 @@ opencode подключает её автоматически из катало�
 - `token-events.jsonl` — машиночитаемая строка на запрос (источник для этого приложения):
 
 ```json
-{"time":"2026-10-30T11:30:40.460Z","sessionId":"ses_ebbcae762ffe...","messageId":"msg_18c9...","model":"developer","provider":"mydomen","steps":61,"input":85679038,"output":368717,"reasoning":1028494,"cacheRead":0,"cacheWrite":0,"billed":87066249,"context":169000,"durationMs":694000}
+{"time":"2026-10-30T11:30:40.460Z","sessionId":"ses_ebbcae762ffe...","messageId":"msg_18c9...","model":"developer","provider":"mydomain.loc","steps":61,"input":85679038,"output":368717,"reasoning":1028494,"cacheRead":0,"cacheWrite":0,"billed":87066249,"context":169000,"durationMs":694000}
 ```
 
 | Поле | Значение |
@@ -133,15 +133,15 @@ opencode подключает её автоматически из катало�
 
 ## Бюджет и настройки
 
-Цифры в верхней полосе берутся из LiteLLM: `GET https://litellm.mydomen/key/info`
+Цифры в верхней полосе берутся из LiteLLM: `GET https://litellm.mydomain.loc/key/info`
 (заголовок `Authorization: Bearer <ключ>`). Ответ содержит `spend`, `max_budget`,
 `budget_reset_at`; при лимите в сутки (`budget_duration: 1d`) остаток обнуляется в 00:00 UTC.
 
 Ключ берётся по порядку:
 
 1. поле `ApiKey` в конфиге приложения;
-2. переменная окружения `MYDOMEN_API_KEY`;
-3. поле `"apiKey"` провайдера `mydomen` из `%USERPROFILE%\.config\opencode\opencode.jsonc`.
+2. переменная окружения `MYDOMAIN_API_KEY`;
+3. поле `"apiKey"` провайдера `mydomain.loc` из `%USERPROFILE%\.config\opencode\opencode.jsonc`.
 
 Конфиг приложения (создаётся при первом запуске, открывается ссылкой **конфиг** в верхней полосе):
 
@@ -149,7 +149,7 @@ opencode подключает её автоматически из катало�
 
 ```json
 {
-  "LitellmBaseUrl": "https://litellm.mydomen",
+  "LitellmBaseUrl": "https://litellm.mydomain.loc",
   "ApiKey": "",
   "OpencodeConfigPath": "C:\\Users\\<user>\\.config\\opencode\\opencode.jsonc",
   "BudgetRefreshSeconds": 60

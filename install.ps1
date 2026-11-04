@@ -100,6 +100,13 @@ if (-not (Test-Path -LiteralPath $configRoot)) {
     exit 1
 }
 
+$dbPath = Join-Path $dataDir 'opencode.db'
+if (-not (Test-Path -LiteralPath $dbPath)) {
+    Write-Err "Не найдена база данных opencode: $dbPath"
+    Write-Err 'Запустите opencode и выполните хотя бы один запрос, затем повторите установку.'
+    exit 1
+}
+
 New-Item -ItemType Directory -Path $pluginsDir -Force | Out-Null
 
 if ($installed) {

@@ -6,21 +6,44 @@ using System.Text.RegularExpressions;
 
 namespace TokenMonitor;
 
+public enum DataSource
+{
+    OpenCode,
+    Cursor,
+    Claude,
+    Devin
+}
+
 public sealed class AppSettings
 {
-    public string LitellmBaseUrl { get; set; } = "https://litellm.mydomen";
+    public string LitellmBaseUrl { get; set; } = "https://litellm.mydomain.loc";
     public string ApiKey { get; set; } = string.Empty;
     public string OpencodeConfigPath { get; set; } = SettingsStore.DefaultOpencodeConfigPath;
     public int BudgetRefreshSeconds { get; set; } = 60;
-    public string LastSource { get; set; } = "OpenCode";
+    public DataSource LastSource { get; set; } = DataSource.OpenCode;
     public string CursorStateDbPath { get; set; } = string.Empty;
     public string CursorEventsPath { get; set; } = string.Empty;
+    public string DevinApiKey { get; set; } = string.Empty;
+    public string DevinOrgId { get; set; } = string.Empty;
+    public string ConfigOpenCode { get; set; } = SettingsStore.DefaultOpencodeConfigPath;
+    public string ConfigCursor { get; set; } = SettingsStore.DefaultCursorConfigPath;
+    public string ConfigClaude { get; set; } = SettingsStore.DefaultClaudeConfigPath;
+    public string ConfigDevin { get; set; } = SettingsStore.DefaultDevinConfigPath;
 }
 
 public static class SettingsStore
 {
     public static string DefaultOpencodeConfigPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "opencode", "opencode.jsonc");
+
+    public static string DefaultCursorConfigPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "cursor", "cursor.jsonc");
+
+    public static string DefaultClaudeConfigPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "claude", "claude.jsonc");
+
+    public static string DefaultDevinConfigPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "devin", "devin.jsonc");
 
     public static string SettingsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TokenMonitor");
@@ -36,10 +59,13 @@ public static class SettingsStore
                 var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
                 if (settings is not null)
                 {
-                    if (string.IsNullOrWhiteSpace(settings.LitellmBaseUrl)) settings.LitellmBaseUrl = "https://litellm.mydomen";
+                    if (string.IsNullOrWhiteSpace(settings.LitellmBaseUrl)) settings.LitellmBaseUrl = "https://litellm.mydomain.loc";
                     if (string.IsNullOrWhiteSpace(settings.OpencodeConfigPath)) settings.OpencodeConfigPath = DefaultOpencodeConfigPath;
+                    if (string.IsNullOrWhiteSpace(settings.ConfigOpenCode)) settings.ConfigOpenCode = DefaultOpencodeConfigPath;
+                    if (string.IsNullOrWhiteSpace(settings.ConfigCursor)) settings.ConfigCursor = DefaultCursorConfigPath;
+                    if (string.IsNullOrWhiteSpace(settings.ConfigClaude)) settings.ConfigClaude = DefaultClaudeConfigPath;
+                    if (string.IsNullOrWhiteSpace(settings.ConfigDevin)) settings.ConfigDevin = DefaultDevinConfigPath;
                     if (settings.BudgetRefreshSeconds < 10) settings.BudgetRefreshSeconds = 10;
-                    if (string.IsNullOrWhiteSpace(settings.LastSource)) settings.LastSource = "OpenCode";
                     return settings;
                 }
             }
@@ -97,7 +123,7 @@ public sealed class BudgetService
     {
         if (!string.IsNullOrWhiteSpace(settings.ApiKey)) return settings.ApiKey.Trim();
 
-        var fromEnvironment = Environment.GetEnvironmentVariable("MYDOMEN_API_KEY");
+        var fromEnvironment = Environment.GetEnvironmentVariable("MYDOMAIN_API_KEY");
         if (!string.IsNullOrWhiteSpace(fromEnvironment)) return fromEnvironment.Trim();
 
         try

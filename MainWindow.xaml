@@ -47,23 +47,12 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
         </Style>
-        <Style x:Key="SourceTab" TargetType="Button">
-            <Setter Property="Padding" Value="12,4" />
-            <Setter Property="Margin" Value="0" />
+        <Style x:Key="SourceComboBox" TargetType="ComboBox">
+            <Setter Property="Padding" Value="8,4" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="#6B7280" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
+            <Setter Property="FontSize" Value="12" />
         </Style>
     </Window.Resources>
 
@@ -80,10 +69,13 @@
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock Text="Token Monitor" FontSize="17" FontWeight="SemiBold" Foreground="#111827" />
                     <Border Background="#F3F4F6" CornerRadius="8" Padding="2" Margin="0,6,0,4" HorizontalAlignment="Left">
-                        <StackPanel Orientation="Horizontal">
-                            <Button x:Name="OpenCodeTab" Style="{StaticResource SourceTab}" Content="OpenCode" Click="OpenCodeTab_Click" />
-                            <Button x:Name="CursorTab" Style="{StaticResource SourceTab}" Content="Cursor" Click="CursorTab_Click" />
-                        </StackPanel>
+                        <ComboBox x:Name="SourceComboBox" Width="120" Height="28" Style="{StaticResource SourceComboBox}"
+                                  SelectionChanged="SourceComboBox_SelectionChanged">
+                            <ComboBoxItem Content="OpenCode" Tag="OpenCode" />
+                            <ComboBoxItem Content="Cursor" Tag="Cursor" />
+                            <ComboBoxItem Content="Claude" Tag="Claude" />
+                            <ComboBoxItem Content="Devin" Tag="Devin" />
+                        </ComboBox>
                     </Border>
                     <TextBlock x:Name="DbPathText" FontSize="10" Foreground="#8A8F98" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
@@ -102,7 +94,12 @@
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
                     <TextBlock x:Name="StatusText" FontSize="11" Foreground="#6B7280" VerticalAlignment="Center" Margin="0,0,10,0" />
-                    <Button x:Name="RefreshButton" Content="Обновить" Padding="14,5" Click="RefreshButton_Click" />
+                    <StackPanel Orientation="Vertical">
+                        <Button x:Name="RefreshButton" Content="Обновить" Padding="14,5" Click="RefreshButton_Click" />
+                        <TextBlock FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0">
+                            <Hyperlink x:Name="SourceConfigLink" Click="SourceConfigLink_Click" Foreground="#2563EB">конфиг</Hyperlink>
+                        </TextBlock>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>
