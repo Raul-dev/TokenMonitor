@@ -47,6 +47,24 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
         </Style>
+        <Style x:Key="SourceTab" TargetType="Button">
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#6B7280" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <DockPanel>
@@ -61,6 +79,12 @@
 
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock Text="Token Monitor" FontSize="17" FontWeight="SemiBold" Foreground="#111827" />
+                    <Border Background="#F3F4F6" CornerRadius="8" Padding="2" Margin="0,6,0,4" HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="OpenCodeTab" Style="{StaticResource SourceTab}" Content="OpenCode" Click="OpenCodeTab_Click" />
+                            <Button x:Name="CursorTab" Style="{StaticResource SourceTab}" Content="Cursor" Click="CursorTab_Click" />
+                        </StackPanel>
+                    </Border>
                     <TextBlock x:Name="DbPathText" FontSize="10" Foreground="#8A8F98" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
 
@@ -145,7 +169,7 @@
                             <TextBlock Grid.Column="7" Text="ВРЕМЯ" Style="{StaticResource HeaderCell}" />
                         </Grid>
                     </Border>
-                    <TextBlock DockPanel.Dock="Bottom" x:Name="TreeHint" Text="Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в opencode."
+                    <TextBlock DockPanel.Dock="Bottom" x:Name="TreeHint" Text="Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode."
                                FontSize="10" Foreground="#8A8F98" Margin="12,6,12,8" />
                     <TreeView x:Name="SessionsTree"
                               BorderThickness="0"

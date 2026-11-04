@@ -12,6 +12,9 @@ public sealed class AppSettings
     public string ApiKey { get; set; } = string.Empty;
     public string OpencodeConfigPath { get; set; } = SettingsStore.DefaultOpencodeConfigPath;
     public int BudgetRefreshSeconds { get; set; } = 60;
+    public string LastSource { get; set; } = "OpenCode";
+    public string CursorStateDbPath { get; set; } = string.Empty;
+    public string CursorEventsPath { get; set; } = string.Empty;
 }
 
 public static class SettingsStore
@@ -36,6 +39,7 @@ public static class SettingsStore
                     if (string.IsNullOrWhiteSpace(settings.LitellmBaseUrl)) settings.LitellmBaseUrl = "https://litellm.mydomen";
                     if (string.IsNullOrWhiteSpace(settings.OpencodeConfigPath)) settings.OpencodeConfigPath = DefaultOpencodeConfigPath;
                     if (settings.BudgetRefreshSeconds < 10) settings.BudgetRefreshSeconds = 10;
+                    if (string.IsNullOrWhiteSpace(settings.LastSource)) settings.LastSource = "OpenCode";
                     return settings;
                 }
             }
@@ -71,6 +75,8 @@ public sealed class BudgetInfo
     public DateTime? ResetAt { get; init; }
     public string? Alias { get; init; }
     public string? Error { get; init; }
+    public string? DisplayText { get; init; }
+    public string? DetailText { get; init; }
 
     public double? Remaining => MaxBudget.HasValue ? Math.Max(0, MaxBudget.Value - (Spend ?? 0)) : null;
     public double Ratio => MaxBudget is > 0 ? (Spend ?? 0) / MaxBudget.Value : 0;

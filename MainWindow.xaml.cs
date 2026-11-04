@@ -16,25 +16,31 @@ public partial class MainWindow : Window
     static readonly Brush BudgetMuted = new SolidColorBrush(Color.FromRgb(0x8A, 0x8F, 0x98));
 
     readonly DataStore store = new();
+    readonly CursorStore cursorStore;
     readonly AppSettings settings;
     readonly BudgetService budgetService;
     readonly DispatcherTimer timer;
 
     DataSnapshot? snapshot;
     BudgetInfo? budget;
+    CursorPeriodUsage? cursorPeriod;
     DateTime lastBudgetFetch = DateTime.MinValue;
+    DateTime lastCursorPeriodFetch = DateTime.MinValue;
     List<Node> roots = new();
     Node? selected;
     long signature;
     string liveKey = string.Empty;
     bool busy;
+    string currentSource = "OpenCode";
 
     public MainWindow()
     {
         InitializeComponent();
 
         settings = SettingsStore.Load();
+        currentSource = settings.LastSource ?? "OpenCode";
         budgetService = new BudgetService(settings);
+        cursorStore = new CursorStore(settings);
         SettingsStore.EnsureExists(settings);
 
         LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
@@ -44,7 +50,8 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
-            DbPathText.Text = store.DbPath;
+            UpdateTabStyle();
+            DbPathText.Text = currentSource == "OpenCode" ? store.DbPath : cursorStore.EventsPath;
             await RefreshAsync();
             timer.Start();
         };
@@ -65,9 +72,17 @@ public partial class MainWindow : Window
 
         try
         {
-            var loaded = await Task.Run(store.Load);
-            snapshot = loaded;
+            DataSnapshot loaded;
+            if (currentSource == "OpenCode")
+            {
+                loaded = await Task.Run(store.Load);
+            }
+            else
+            {
+                loaded = await cursorStore.LoadAsync(refreshRemote: true);
+            }
 
+            snapshot = loaded;
             DbPathText.Text = loaded.DbPath;
 
             if (loaded.Signature != signature)
@@ -82,11 +97,23 @@ public partial class MainWindow : Window
             var requests = loaded.Sessions.Sum(s => s.Requests.Count);
             StatusText.Text = $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
 
-            if (budget is null || (DateTime.UtcNow - lastBudgetFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
+            if (currentSource == "OpenCode")
             {
-                lastBudgetFetch = DateTime.UtcNow;
-                budget = await budgetService.GetAsync();
-                UpdateBudgetUi();
+                if (budget is null || (DateTime.UtcNow - lastBudgetFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
+                {
+                    lastBudgetFetch = DateTime.UtcNow;
+                    budget = await budgetService.GetAsync();
+                    UpdateBudgetUi();
+                }
+            }
+            else
+            {
+                if (cursorPeriod is null || (DateTime.UtcNow - lastCursorPeriodFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
+                {
+                    lastCursorPeriodFetch = DateTime.UtcNow;
+                    cursorPeriod = await cursorStore.GetPeriodAsync();
+                    UpdateCursorBudgetUi();
+                }
             }
         }
         catch (Exception error)
@@ -271,6 +298,12 @@ public partial class MainWindow : Window
 
     void UpdateBudgetUi()
     {
+        if (currentSource == "Cursor")
+        {
+            UpdateCursorBudgetUi();
+            return;
+        }
+
         if (budget is null) return;
 
         if (budget.Spend is not { } spend)
@@ -303,6 +336,47 @@ public partial class MainWindow : Window
         if (budget.ResetAt is { } tooltipReset) tooltip += $"\nсброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}";
         if (budget.Alias is { } alias) tooltip += $"\nключ: {alias}";
         tooltip += "\nисточник: " + settings.LitellmBaseUrl.TrimEnd('/') + "/key/info";
+
+        BudgetText.ToolTip = tooltip;
+        BudgetDetail.ToolTip = tooltip;
+    }
+
+    void UpdateCursorBudgetUi()
+    {
+        if (cursorPeriod is null) return;
+
+        if (cursorPeriod.Error is not null)
+        {
+            BudgetText.Text = "—";
+            BudgetText.Foreground = BudgetMuted;
+            BudgetDetail.Text = cursorPeriod.Error;
+            BudgetText.ToolTip = cursorPeriod.Error;
+            BudgetDetail.ToolTip = cursorPeriod.Error;
+            return;
+        }
+
+        var totalPercent = cursorPeriod.TotalPercent;
+        BudgetText.Text = $"{totalPercent:0.0}%";
+
+        BudgetText.Foreground = totalPercent switch
+        {
+            >= 90 => BudgetCritical,
+            >= 70 => BudgetWarning,
+            _ => BudgetNormal,
+        };
+
+        var details = new List<string>();
+        if (cursorPeriod.CycleStart is { } start && cursorPeriod.CycleEnd is { } end)
+            details.Add($"{start:dd.MM} - {end:dd.MM}");
+        if (!string.IsNullOrWhiteSpace(cursorPeriod.Membership))
+            details.Add(cursorPeriod.Membership);
+        BudgetDetail.Text = string.Join(" · ", details);
+
+        var tooltip = $"Auto: {cursorPeriod.AutoPercent:0.0}% · API: {cursorPeriod.ApiPercent:0.0}%";
+        if (!string.IsNullOrWhiteSpace(cursorPeriod.DisplayMessage))
+            tooltip += $"\n{cursorPeriod.DisplayMessage}";
+        if (!string.IsNullOrWhiteSpace(cursorPeriod.Source))
+            tooltip += $"\nисточник: {cursorPeriod.Source}";
 
         BudgetText.ToolTip = tooltip;
         BudgetDetail.ToolTip = tooltip;
@@ -496,6 +570,52 @@ public partial class MainWindow : Window
         if (SessionsTree.ItemContainerGenerator.ContainerFromItem(node) is TreeViewItem container)
         {
             container.BringIntoView();
+        }
+    }
+
+    async void OpenCodeTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (currentSource == "OpenCode") return;
+        currentSource = "OpenCode";
+        settings.LastSource = "OpenCode";
+        SettingsStore.TrySave(settings);
+        UpdateTabStyle();
+        lastBudgetFetch = DateTime.MinValue;
+        signature = 0;
+        DbPathText.Text = store.DbPath;
+        TreeHint.Text = "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.";
+        await RefreshAsync();
+    }
+
+    async void CursorTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (currentSource == "Cursor") return;
+        currentSource = "Cursor";
+        settings.LastSource = "Cursor";
+        SettingsStore.TrySave(settings);
+        UpdateTabStyle();
+        lastCursorPeriodFetch = DateTime.MinValue;
+        signature = 0;
+        DbPathText.Text = cursorStore.EventsPath;
+        TreeHint.Text = "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.";
+        await RefreshAsync();
+    }
+
+    void UpdateTabStyle()
+    {
+        if (currentSource == "OpenCode")
+        {
+            OpenCodeTab.Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+            OpenCodeTab.Foreground = new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x27));
+            CursorTab.Background = Brushes.Transparent;
+            CursorTab.Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80));
+        }
+        else
+        {
+            CursorTab.Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+            CursorTab.Foreground = new SolidColorBrush(Color.FromRgb(0x11, 0x18, 0x27));
+            OpenCodeTab.Background = Brushes.Transparent;
+            OpenCodeTab.Foreground = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80));
         }
     }
 }
