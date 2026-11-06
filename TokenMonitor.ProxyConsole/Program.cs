@@ -39,7 +39,8 @@ if (!string.IsNullOrWhiteSpace(proxyRawString))
 {
     try
     {
-        upstreamProxy = new ProxySettings(proxyRawString);
+        upstreamProxy = new ProxySettings(proxyRawString!);
+        Console.WriteLine($"Chain Proxy: {upstreamProxy.Scheme}://{upstreamProxy.Host}:{upstreamProxy.Port}");
     }
     catch (Exception ex)
     {
