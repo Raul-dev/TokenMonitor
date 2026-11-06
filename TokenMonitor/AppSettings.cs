@@ -110,7 +110,7 @@ public sealed class BudgetInfo
 
 public sealed class BudgetService
 {
-    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    static readonly HttpClient Http = GlobalRouteHttpClient.CreateClient(TimeSpan.FromSeconds(10));
     static readonly Regex ApiKeyRegex = new("\"apiKey\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.Compiled);
 
     readonly AppSettings settings;
@@ -143,6 +143,11 @@ public sealed class BudgetService
 
     public async Task<BudgetInfo> GetAsync(CancellationToken token = default)
     {
+        if (!GlobalRouteHttpClient.CanMakeExternalRequests())
+        {
+            return new BudgetInfo { Error = "внешние запросы запрещены (OnlyByProxy без прокси)" };
+        }
+
         var apiKey = ResolveApiKey();
         if (apiKey is null)
         {

@@ -2,6 +2,7 @@
   "profiles": {
     "TokenMonitor.ProxyConsole": {
       "commandName": "Project",
+      "commandLineArgs": "-- --ProxyEnabled true",
       "launchBrowser": true,
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"

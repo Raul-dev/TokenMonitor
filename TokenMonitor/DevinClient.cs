@@ -48,7 +48,7 @@ public sealed class DevinSubcategory
 
 public sealed class DevinClient
 {
-    static readonly HttpClient Http = CreateClient();
+    static readonly HttpClient Http = GlobalRouteHttpClient.CreateClient(TimeSpan.FromSeconds(12));
 
     readonly AppSettings settings;
 
@@ -76,6 +76,11 @@ public sealed class DevinClient
         if (!IsConfigured)
         {
             return new DevinUsageMetrics { Error = "не настроен Devin API ключ или Org ID" };
+        }
+
+        if (!GlobalRouteHttpClient.CanMakeExternalRequests())
+        {
+            return new DevinUsageMetrics { Error = "внешние запросы запрещены (OnlyByProxy без прокси)" };
         }
 
         try
@@ -117,6 +122,11 @@ public sealed class DevinClient
         if (!IsConfigured)
         {
             return new DevinSessionMetrics { Error = "не настроен Devin API ключ или Org ID" };
+        }
+
+        if (!GlobalRouteHttpClient.CanMakeExternalRequests())
+        {
+            return new DevinSessionMetrics { Error = "внешние запросы запрещены (OnlyByProxy без прокси)" };
         }
 
         try
@@ -175,6 +185,11 @@ public sealed class DevinClient
         if (!IsConfigured)
         {
             return new DevinCategoryMetrics { Error = "не настроен Devin API ключ или Org ID" };
+        }
+
+        if (!GlobalRouteHttpClient.CanMakeExternalRequests())
+        {
+            return new DevinCategoryMetrics { Error = "внешние запросы запрещены (OnlyByProxy без прокси)" };
         }
 
         try

@@ -1,8 +1,8 @@
 ﻿// Строим цепочку прокси:OpenCode ➔ Ваш TokenMonitor (8181) ➔ Nekobox (2080) ➔ Интернет
 //# Указываем прокси для HTTP и HTTPS трафика
-//$env:HTTP_PROXY = "http://localhost:8181"
-//$env:HTTPS_PROXY = "http://localhost:8181"
-//Get-ChildItem env:HTTP*_PROXY
+$env:HTTP_PROXY = "http://localhost:8181"
+$env:HTTPS_PROXY = "http://localhost:8181"
+Get-ChildItem env:HTTP*_PROXY
 //Remove-Item env:HTTP_PROXY
 //Remove-Item env:HTTPS_PROXY
 //#подключение к Nekobox, Привязываем консоль к системному прокси, чтобы она увидела внешние сервера OpenCode
@@ -13,6 +13,9 @@
 (Invoke-WebRequest ipinfo.io/ip -Proxy $env:HTTP_PROXY).Content
 (Invoke-WebRequest https://ipify.org -Proxy http://localhost:8181).Content
 
+Get-Process -Name *opencode*
+Stop-Process -Id 3528
+
 или так
 # Если хотите записать в переменную, а потом вывести:
 $response = Invoke-WebRequest api.ipify.org
@@ -21,4 +24,4 @@ $myIP
 
 Get-NetTCPConnection -RemotePort 8181 | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess
 
-dotnet run --project TokenMonitor.ProxyConsole
+dotnet run --project TokenMonitor.ProxyConsole --ProxyEnabled true

@@ -37,6 +37,10 @@ public partial class App : Application
             return;
         }
 
+        Serilog.Log.Logger = new Serilog.LoggerConfiguration()
+            .MinimumLevel.Information()
+            .CreateLogger();
+        _ = Task.Run(() => GlobalRouteHttpClient.InitializeAsync());
         MainWindow = new MainWindow();
         MainWindow.Show();
     }

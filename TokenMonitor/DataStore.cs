@@ -37,29 +37,57 @@ public sealed class DataStore
     public DataSnapshot Load()
     {
         List<SessionData> sessions;
+        List<LiveEvent> live;
+        long signature;
+
         try
         {
-            sessions = LoadSessions();
+            using var connection = Open();
+
+            if (HasTable(connection, "session_v2") && HasTable(connection, "session_message"))
+            {
+                sessions = LoadSessionsV2(connection);
+                live = LiveFromRequests(sessions);
+                signature = ComputeSignatureV2(connection);
+            }
+            else
+            {
+                sessions = LoadSessions(connection);
+                live = LoadLive();
+                signature = ComputeSignature(connection);
+            }
         }
         catch (Microsoft.Data.Sqlite.SqliteException)
         {
             sessions = new List<SessionData>();
+            live = LoadLive();
+            signature = 0;
         }
         catch (Exception)
         {
             sessions = new List<SessionData>();
+            live = LoadLive();
+            signature = 0;
         }
 
         return new DataSnapshot
         {
             Sessions = sessions,
-            Live = LoadLive(),
-            Signature = ComputeSignature(),
+            Live = live,
+            Signature = signature,
             DbPath = DbPath,
             EventsPath = EventsPath,
             LogPath = LogPath,
             LoadedAt = DateTime.Now,
         };
+    }
+
+    static bool HasTable(SqliteConnection connection, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $name";
+        command.Parameters.AddWithValue("$name", name);
+        return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
     SqliteConnection Open()
@@ -86,13 +114,11 @@ public sealed class DataStore
 
     static DateTime FromMs(long ms) => ms <= 0 ? DateTime.MinValue : Epoch.AddMilliseconds(ms).ToLocalTime();
 
-    List<SessionData> LoadSessions()
+    List<SessionData> LoadSessions(SqliteConnection connection)
     {
         var sessions = new Dictionary<string, SessionData>(StringComparer.Ordinal);
         var requests = new Dictionary<string, RequestData>(StringComparer.Ordinal);
         var users = new Dictionary<string, (DateTime Time, string Text)>(StringComparer.Ordinal);
-
-        using var connection = Open();
 
         using (var command = connection.CreateCommand())
         {
@@ -231,11 +257,251 @@ public sealed class DataStore
         return sessions.Values.ToList();
     }
 
-    long ComputeSignature()
+    // opencode >= 2.x хранит историю в session_v2/session_message:
+    // сообщение — строка с type ('user'/'assistant'/...) и JSON в data.
+    // Запрос = user-сообщение + все assistant-сообщения до следующего user.
+    List<SessionData> LoadSessionsV2(SqliteConnection connection)
+    {
+        var sessions = new Dictionary<string, SessionData>(StringComparer.Ordinal);
+        var open = new Dictionary<string, RequestData>(StringComparer.Ordinal);
+
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT id, IFNULL(parent_id, ''), IFNULL(title, ''), directory,
+                       IFNULL(json_extract(model, '$.id'), ''), time_created, time_updated
+                FROM session_v2
+                """;
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var session = new SessionData
+                {
+                    Id = reader.GetString(0),
+                    ParentId = reader.GetString(1),
+                    Title = reader.GetString(2),
+                    Directory = reader.GetString(3),
+                    Model = reader.GetString(4),
+                    Created = FromMs(reader.GetInt64(5)),
+                    Updated = FromMs(reader.GetInt64(6)),
+                };
+                sessions[session.Id] = session;
+            }
+        }
+
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT id, session_id, type, time_created, data
+                FROM session_message
+                ORDER BY session_id, seq
+                """;
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetString(0);
+                var sessionId = reader.GetString(1);
+                var type = reader.GetString(2);
+                var createdColumn = reader.GetInt64(3);
+                var data = reader.GetString(4);
+
+                if (!sessions.TryGetValue(sessionId, out var session)) continue;
+
+                using var document = JsonDocument.Parse(data);
+                var root = document.RootElement;
+
+                if (type == "user")
+                {
+                    var time = JsonTime(root, "time", "created") is { } userCreated && userCreated > 0
+                        ? FromMs(userCreated)
+                        : FromMs(createdColumn);
+                    var text = JsonText(root, "text");
+                    if (text.Length == 0) text = JsonText(root, "metadata", "displayText");
+
+                    var request = new RequestData
+                    {
+                        Id = id,
+                        SessionId = sessionId,
+                        Session = session,
+                        Time = time,
+                        Prompt = text,
+                    };
+                    session.Requests.Add(request);
+                    open[sessionId] = request;
+                    continue;
+                }
+
+                if (type != "assistant") continue;
+
+                var created = JsonTime(root, "time", "created") is { } stepCreated && stepCreated > 0
+                    ? FromMs(stepCreated)
+                    : FromMs(createdColumn);
+                var completedValue = JsonTime(root, "time", "completed");
+                var completed = completedValue > 0 ? FromMs(completedValue) : created;
+
+                var tokens = new TokenCounts(
+                    JsonNumber(root, "tokens", "input"),
+                    JsonNumber(root, "tokens", "output"),
+                    JsonNumber(root, "tokens", "reasoning"),
+                    JsonNumber(root, "tokens", "cache", "read"),
+                    JsonNumber(root, "tokens", "cache", "write"));
+
+                var model = JsonText(root, "model", "id");
+                if (model.Length == 0) model = JsonText(root, "modelID");
+
+                if (!open.TryGetValue(sessionId, out var request2))
+                {
+                    request2 = new RequestData
+                    {
+                        Id = id,
+                        SessionId = sessionId,
+                        Session = session,
+                        Time = created,
+                    };
+                    session.Requests.Add(request2);
+                    open[sessionId] = request2;
+                }
+
+                request2.Steps.Add(new StepData
+                {
+                    Id = id,
+                    Time = created,
+                    Completed = completed,
+                    Model = model,
+                    Tokens = tokens,
+                });
+                request2.Tokens += tokens;
+                session.Tokens += tokens;
+            }
+        }
+
+        foreach (var session in sessions.Values)
+        {
+            session.Requests.Sort((a, b) => a.Time.CompareTo(b.Time));
+        }
+
+        return sessions.Values.ToList();
+    }
+
+    static long JsonNumber(JsonElement root, params string[] path)
+    {
+        var current = root;
+        foreach (var name in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(name, out current))
+                return 0;
+        }
+        return current.ValueKind == JsonValueKind.Number ? current.GetInt64() : 0;
+    }
+
+    static string JsonText(JsonElement root, params string[] path)
+    {
+        var current = root;
+        foreach (var name in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(name, out current))
+                return string.Empty;
+            if (current.ValueKind == JsonValueKind.String) return current.GetString() ?? string.Empty;
+        }
+        return current.ValueKind == JsonValueKind.String ? current.GetString() ?? string.Empty : string.Empty;
+    }
+
+    static long JsonTime(JsonElement root, params string[] path)
+    {
+        var current = root;
+        foreach (var name in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(name, out current))
+                return 0;
+        }
+        return current.ValueKind == JsonValueKind.Number ? current.GetInt64() : 0;
+    }
+
+    long ComputeSignatureV2(SqliteConnection connection)
     {
         try
         {
-            using var connection = Open();
+            var result = 17L;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT IFNULL(MAX(time_updated), 0), COUNT(*) FROM session_message";
+                using var reader = command.ExecuteReader();
+                if (reader.Read())
+                {
+                    result = result * 31 + reader.GetInt64(0);
+                    result = result * 31 + reader.GetInt64(1);
+                }
+            }
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT IFNULL(MAX(time_updated), 0), COUNT(*) FROM session_v2";
+                using var reader = command.ExecuteReader();
+                if (reader.Read())
+                {
+                    result = result * 31 + reader.GetInt64(0);
+                    result = result * 31 + reader.GetInt64(1);
+                }
+            }
+
+            return result;
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            return 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    // В opencode 2.x плагин token-stats.ts несовместим со встроенным SDK,
+    // поэтому ленту строим из самих данных: один запрос = user + его шаги.
+    List<LiveEvent> LiveFromRequests(List<SessionData> sessions)
+    {
+        var events = new List<LiveEvent>();
+
+        foreach (var session in sessions)
+        {
+            foreach (var request in session.Requests)
+            {
+                if (request.Steps.Count == 0) continue;
+
+                var last = request.Steps[^1];
+                var end = last.Completed > DateTime.MinValue ? last.Completed : last.Time;
+
+                events.Add(new LiveEvent
+                {
+                    Time = end,
+                    SessionId = session.Id,
+                    MessageId = last.Id,
+                    Model = last.Model,
+                    Steps = request.Steps.Count,
+                    Input = request.Tokens.Input,
+                    Output = request.Tokens.Output,
+                    Reasoning = request.Tokens.Reasoning,
+                    CacheRead = request.Tokens.CacheRead,
+                    CacheWrite = request.Tokens.CacheWrite,
+                    Billed = request.Tokens.Total,
+                    Context = last.Tokens.Input + last.Tokens.CacheRead,
+                    DurationMs = request.DurationMs,
+                });
+            }
+        }
+
+        events.Sort((a, b) => a.Time.CompareTo(b.Time));
+        if (events.Count > 500) events = events.GetRange(events.Count - 500, 500);
+        return events;
+    }
+
+    long ComputeSignature(SqliteConnection connection)
+    {
+        try
+        {
             var result = 17L;
 
             using (var command = connection.CreateCommand())

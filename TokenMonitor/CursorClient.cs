@@ -37,7 +37,7 @@ public sealed class CursorUsageEvent
 
 public sealed class CursorClient
 {
-    static readonly HttpClient Http = CreateClient();
+    static readonly HttpClient Http = GlobalRouteHttpClient.CreateClient(TimeSpan.FromSeconds(12));
 
     readonly AppSettings settings;
 
@@ -194,6 +194,11 @@ public sealed class CursorClient
             return new CursorPeriodUsage { Error = error };
         }
 
+        if (!GlobalRouteHttpClient.CanMakeExternalRequests())
+        {
+            return new CursorPeriodUsage { Error = "внешние запросы запрещены (OnlyByProxy без прокси)" };
+        }
+
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://cursor.com/api/usage-summary");
@@ -236,6 +241,11 @@ public sealed class CursorClient
 
     public async Task<(List<CursorUsageEvent> Events, string? Error)> GetDashboardEventsAsync(DateTime start, DateTime end, CancellationToken token = default)
     {
+        if (!GlobalRouteHttpClient.CanMakeExternalRequests())
+        {
+            return (new List<CursorUsageEvent>(), "внешние запросы запрещены (OnlyByProxy без прокси)");
+        }
+
         if (!TryLoadSession(out var accessToken, out var cookie, out _, out var error))
         {
             return (new List<CursorUsageEvent>(), error);

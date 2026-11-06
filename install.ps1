@@ -11,7 +11,7 @@ function Write-Ok { param($text) Write-Host $text -ForegroundColor Green }
 function Write-Warn { param($text) Write-Host $text -ForegroundColor Yellow }
 function Write-Err { param($text) Write-Host $text -ForegroundColor Red }
 
-$source = Join-Path $PSScriptRoot 'TokenSetup\token-stats.ts'
+$source = Join-Path $PSScriptRoot 'TokenMonitor\OpenCodeSetup\token-stats.ts'
 $configRoot = if ($env:OPENCODE_CONFIG_DIR) { $env:OPENCODE_CONFIG_DIR } else { Join-Path $env:USERPROFILE '.config\opencode' }
 $pluginsDir = Join-Path $configRoot 'plugins'
 $target = Join-Path $pluginsDir 'token-stats.ts'
