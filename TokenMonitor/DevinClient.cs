@@ -69,7 +69,7 @@ public sealed class DevinClient
         };
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(settings.DevinApiKey) && !string.IsNullOrWhiteSpace(settings.DevinOrgId);
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(settings.Devin.ApiKey) && !string.IsNullOrWhiteSpace(settings.Devin.OrgId);
 
     public async Task<DevinUsageMetrics> GetUsageMetricsAsync(long? timeAfter = null, long? timeBefore = null, CancellationToken token = default)
     {
@@ -131,7 +131,7 @@ public sealed class DevinClient
 
         try
         {
-            var url = $"https://api.devin.ai/v3/organizations/{settings.DevinOrgId}/metrics/sessions";
+            var url = $"https://api.devin.ai/v3/organizations/{settings.Devin.OrgId}/metrics/sessions";
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             ApplyAuth(request);
@@ -252,7 +252,7 @@ public sealed class DevinClient
 
     void ApplyAuth(HttpRequestMessage request)
     {
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.DevinApiKey.Trim());
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.Devin.ApiKey?.Trim() ?? string.Empty);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 

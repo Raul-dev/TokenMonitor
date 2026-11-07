@@ -72,9 +72,9 @@ public sealed class CursorClient
         source = string.Empty;
         error = null;
 
-        var dbPath = string.IsNullOrWhiteSpace(settings.CursorStateDbPath)
+        var dbPath = string.IsNullOrWhiteSpace(settings.Cursor.StateDbPath)
             ? DefaultStateDbPath
-            : settings.CursorStateDbPath;
+            : settings.Cursor.StateDbPath;
 
         if (!File.Exists(dbPath))
         {

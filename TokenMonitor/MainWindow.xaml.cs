@@ -33,7 +33,12 @@ public partial class MainWindow : Window
     long signature;
     string liveKey = string.Empty;
     bool busy;
+    bool sourceReady;
+    bool suppressSourceChange;
     DataSource currentSource = DataSource.OpenCode;
+
+    // Свойство, к которому привяжется ComboBox
+    public Dictionary<string, ProviderConfigEx> Providers { get; set; } = new();
 
     public MainWindow()
     {
@@ -46,6 +51,15 @@ public partial class MainWindow : Window
         devinStore = new DevinStore(settings);
         SettingsStore.EnsureExists(settings);
 
+        Providers = new Dictionary<string, ProviderConfigEx>
+        {
+            { "OpenCode", new ProviderConfigEx(settings.OpenCode, DataSource.OpenCode, store.DbPath, "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.") },
+            { "Cursor", new ProviderConfigEx(settings.Cursor, DataSource.Cursor, cursorStore.EventsPath, "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.") },
+            { "Claude", new ProviderConfigEx(settings.Claude, DataSource.Claude, "Claude - не реализовано", "Claude - не реализовано") },
+            { "Devin", new ProviderConfigEx(settings.Devin, DataSource.Devin, devinStore.IsConfigured ? $"Devin API v3 (org: {settings.Devin.OrgId})" : "Devin API не настроен", "Статистика использования Devin API v3. Настройте API ключ и Org ID в конфиге.") },
+        };
+        DataContext = this;
+
         LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
         ConfigLink.ToolTip = SettingsStore.SettingsPath;
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -54,12 +68,8 @@ public partial class MainWindow : Window
         Loaded += async (_, _) =>
         {
             UpdateComboBoxSelection();
-            DbPathText.Text = currentSource switch
-            {
-                DataSource.OpenCode => store.DbPath,
-                DataSource.Cursor => cursorStore.EventsPath,
-                _ => devinStore.IsConfigured ? $"Devin API v3 (org: {settings.DevinOrgId})" : "Devin API не настроен"
-            };
+            ApplySourceChrome();
+            sourceReady = true;
             await RefreshAsync();
             timer.Start();
         };
@@ -403,7 +413,7 @@ public partial class MainWindow : Window
         var tooltip = $"${spend:0.0000}" + (budget.MaxBudget is { } limit ? $" из ${limit:0.00}" : string.Empty);
         if (budget.ResetAt is { } tooltipReset) tooltip += $"\nсброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}";
         if (budget.Alias is { } alias) tooltip += $"\nключ: {alias}";
-        tooltip += "\nисточник: " + settings.LitellmBaseUrl.TrimEnd('/') + "/key/info";
+        tooltip += "\nисточник: " + settings.LiteLLMBaseUrl.TrimEnd('/') + "/key/info";
 
         BudgetText.ToolTip = tooltip;
         BudgetDetail.ToolTip = tooltip;
@@ -494,14 +504,7 @@ public partial class MainWindow : Window
     {
         SettingsStore.EnsureExists(settings);
 
-        var configPath = currentSource switch
-        {
-            DataSource.OpenCode => settings.ConfigOpenCode,
-            DataSource.Cursor => settings.ConfigCursor,
-            DataSource.Claude => settings.ConfigClaude,
-            DataSource.Devin => settings.ConfigDevin,
-            _ => SettingsStore.SettingsPath
-        };
+        var configPath = CurrentProvider()?.ConfigPath ?? settings.For(currentSource).ConfigPath;
 
         try
         {
@@ -706,47 +709,57 @@ public partial class MainWindow : Window
 
     async void SourceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (SourceComboBox.SelectedItem is not ComboBoxItem item || item.Tag is not string tag) return;
+        if (suppressSourceChange || !sourceReady) return;
+        if (SelectedProvider() is not { } selected) return;
+        if (!selected.IsEnabled)
+        {
+            UpdateComboBoxSelection();
+            return;
+        }
+        if (selected.Source == currentSource) return;
 
-        if (!Enum.TryParse<DataSource>(tag, out var newSource)) return;
-        if (newSource == currentSource) return;
-
-        currentSource = newSource;
-        settings.LastSource = newSource;
+        currentSource = selected.Source;
+        settings.LastSource = currentSource;
         SettingsStore.TrySave(settings);
 
         lastBudgetFetch = DateTime.MinValue;
         lastCursorPeriodFetch = DateTime.MinValue;
         signature = 0;
 
-        DbPathText.Text = currentSource switch
-        {
-            DataSource.OpenCode => store.DbPath,
-            DataSource.Cursor => cursorStore.EventsPath,
-            DataSource.Devin => devinStore.IsConfigured ? $"Devin API v3 (org: {settings.DevinOrgId})" : "Devin API не настроен",
-            _ => "Claude - не реализовано"
-        };
-
-        TreeHint.Text = currentSource switch
-        {
-            DataSource.OpenCode => "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.",
-            DataSource.Cursor => "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.",
-            DataSource.Devin => "Статистика использования Devin API v3. Настройте API ключ и Org ID в конфиге.",
-            _ => "Claude - не реализовано"
-        };
-
+        ApplySourceChrome();
         await RefreshAsync();
     }
 
     void UpdateComboBoxSelection()
     {
-        foreach (ComboBoxItem item in SourceComboBox.Items)
+        var selected = Providers.Values.FirstOrDefault(p => p.Source == currentSource && p.IsEnabled)
+            ?? Providers.Values.FirstOrDefault(p => p.IsEnabled);
+        if (selected is null) return;
+
+        if (selected.Source != currentSource)
         {
-            if (item.Tag is string tag && Enum.TryParse<DataSource>(tag, out var source) && source == currentSource)
-            {
-                SourceComboBox.SelectedItem = item;
-                break;
-            }
+            currentSource = selected.Source;
+            settings.LastSource = currentSource;
+            SettingsStore.TrySave(settings);
         }
+
+        if (ReferenceEquals(SourceComboBox.SelectedValue, selected)) return;
+
+        suppressSourceChange = true;
+        SourceComboBox.SelectedValue = selected;
+        suppressSourceChange = false;
+    }
+
+    ProviderConfigEx? CurrentProvider() =>
+        Providers.Values.FirstOrDefault(p => p.Source == currentSource);
+
+    ProviderConfigEx? SelectedProvider() => SourceComboBox.SelectedValue as ProviderConfigEx
+        ?? (SourceComboBox.SelectedItem is KeyValuePair<string, ProviderConfigEx> pair ? pair.Value : null);
+
+    void ApplySourceChrome()
+    {
+        if (CurrentProvider() is not { } provider) return;
+        DbPathText.Text = provider.PathText;
+        TreeHint.Text = provider.TreeHint;
     }
 }

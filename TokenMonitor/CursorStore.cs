@@ -21,9 +21,9 @@ public sealed class CursorStore
         client = new CursorClient(settings);
     }
 
-    public string EventsPath => string.IsNullOrWhiteSpace(settings.CursorEventsPath)
+    public string EventsPath => string.IsNullOrWhiteSpace(settings.Cursor.EventsPath)
         ? CursorClient.DefaultEventsPath
-        : settings.CursorEventsPath;
+        : settings.Cursor.EventsPath;
 
     public async Task<DataSnapshot> LoadAsync(bool refreshRemote, CancellationToken token = default)
     {

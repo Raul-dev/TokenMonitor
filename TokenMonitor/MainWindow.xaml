@@ -70,11 +70,16 @@
                     <TextBlock Text="Token Monitor" FontSize="17" FontWeight="SemiBold" Foreground="#111827" />
                     <Border Background="#F3F4F6" CornerRadius="8" Padding="2" Margin="0,6,0,4" HorizontalAlignment="Left">
                         <ComboBox x:Name="SourceComboBox" Width="120" Height="28" Style="{StaticResource SourceComboBox}"
+                                  ItemsSource="{Binding Providers}"
+                                  DisplayMemberPath="Key"
+                                  SelectedValuePath="Value"
                                   SelectionChanged="SourceComboBox_SelectionChanged">
-                            <ComboBoxItem Content="OpenCode" Tag="OpenCode" />
-                            <ComboBoxItem Content="Cursor" Tag="Cursor" />
-                            <ComboBoxItem Content="Claude" Tag="Claude" />
-                            <ComboBoxItem Content="Devin" Tag="Devin" />
+                            <ComboBox.ItemContainerStyle>
+                                <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                    <!-- Магия здесь: берём IsEnabled из структуры ProviderConfig (Value) -->
+                                    <Setter Property="IsEnabled" Value="{Binding Value.IsEnabled}"/>
+                                </Style>
+                            </ComboBox.ItemContainerStyle>
                         </ComboBox>
                     </Border>
                     <TextBlock x:Name="DbPathText" FontSize="10" Foreground="#8A8F98" TextTrimming="CharacterEllipsis" />

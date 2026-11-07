@@ -70,7 +70,7 @@ public sealed class DevinStore
             UsageMetrics = usageMetrics,
             SessionMetrics = sessionMetrics,
             CategoryMetrics = categoryMetrics,
-            DbPath = client.IsConfigured ? $"Devin API v3 (org: {settings.DevinOrgId})" : "Devin API не настроен",
+            DbPath = client.IsConfigured ? $"Devin API v3 (org: {settings.Devin.OrgId})" : "Devin API не настроен",
             EventsPath = string.Empty,
             LoadedAt = DateTime.Now,
         };

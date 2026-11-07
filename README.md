@@ -151,9 +151,10 @@ opencode подключает её автоматически из катало�
 
 Ключ берётся по порядку:
 
-1. поле `ApiKey` в конфиге приложения;
+1. поле `LiteLLMApiKey` в конфиге приложения;
 2. переменная окружения `MYDOMAIN_API_KEY`;
-3. поле `"apiKey"` провайдера `mydomain.loc` из `%USERPROFILE%\.config\opencode\opencode.jsonc`.
+3. поле `"apiKey"` провайдера `mydomain.loc` из `OpenCode.ConfigPath`
+   (по умолчанию `%USERPROFILE%\.config\opencode\opencode.jsonc`).
 
 Конфиг приложения (создаётся при первом запуске, открывается ссылкой **конфиг** в верхней полосе):
 
@@ -161,17 +162,40 @@ opencode подключает её автоматически из катало�
 
 ```json
 {
-  "LitellmBaseUrl": "https://litellm.mydomain.loc",
-  "ApiKey": "",
-  "OpencodeConfigPath": "C:\\Users\\<user>\\.config\\opencode\\opencode.jsonc",
-  "BudgetRefreshSeconds": 60
+  "LiteLLMBaseUrl": "https://mydomain.loc",
+  "LiteLLMApiKey": "",
+  "BudgetRefreshSeconds": 60,
+  "LastSource": 0,
+  "OpenCode": {
+    "Name": "OpenCode",
+    "ConfigPath": "C:\\Users\\<user>\\.config\\opencode\\opencode.jsonc",
+    "IsEnabled": true
+  },
+  "Cursor": {
+    "Name": "Cursor",
+    "ConfigPath": "C:\\Users\\<user>\\.config\\cursor\\cursor.jsonc",
+    "IsEnabled": true,
+    "StateDbPath": "",
+    "EventsPath": ""
+  },
+  "Devin": {
+    "Name": "Devin",
+    "ConfigPath": "C:\\Users\\<user>\\.config\\devin\\devin.jsonc",
+    "IsEnabled": true,
+    "ApiKey": "",
+    "OrgId": ""
+  }
 }
 ```
 
-- `LitellmBaseUrl` — адрес LiteLLM (можно заменить на другой инстанс).
-- `ApiKey` — пусто = брать из opencode (обычный случай); можно вписать отдельный ключ.
-- `OpencodeConfigPath` — откуда читать ключ, если `ApiKey` пуст.
+- `LiteLLMBaseUrl` — адрес LiteLLM (можно заменить на другой инстанс).
+- `LiteLLMApiKey` — пусто = брать из конфига OpenCode (обычный случай); можно вписать отдельный ключ.
+- `OpenCode.ConfigPath` — откуда читать ключ, если `LiteLLMApiKey` пуст.
+- `Cursor.StateDbPath` / `Cursor.EventsPath` — пути Cursor; пусто = значения по умолчанию.
+- `Devin.ApiKey` / `Devin.OrgId` — доступ к Devin API v3.
 - `BudgetRefreshSeconds` — как часто перезапрашивать бюджет (кнопка «Обновить» запрашивает сразу).
+
+Старый плоский `settings.json` (`LitellmBaseUrl`, `ApiKey`, `ConfigOpenCode`, `DevinApiKey` и т.д.) подхватывается при загрузке.
 
 Если LiteLLM недоступен, в верхней полосе будет `—` с причиной, остальные показатели работают.
 
