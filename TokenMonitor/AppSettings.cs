@@ -109,7 +109,7 @@ public static class SettingsStore
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "claude", "claude.jsonc");
 
     public static string DefaultDevinConfigPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "devin", "devin.jsonc");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Devin", "config.json");
 
     public static string SettingsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TokenMonitor");

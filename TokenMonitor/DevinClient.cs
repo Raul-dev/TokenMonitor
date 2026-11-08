@@ -85,6 +85,7 @@ public sealed class DevinClient
 
         try
         {
+            // Enterprise endpoint - требует Service User API Key и Enterprise аккаунт
             var url = BuildUrl("https://api.devin.ai/v3/enterprise/metrics/usage",
                 ("time_after", timeAfter?.ToString()),
                 ("time_before", timeBefore?.ToString()));
@@ -97,7 +98,12 @@ public sealed class DevinClient
 
             if (!response.IsSuccessStatusCode)
             {
-                return new DevinUsageMetrics { Error = $"usage metrics {(int)response.StatusCode}" };
+                var errorMsg = $"usage metrics {(int)response.StatusCode}";
+                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    errorMsg += " (требуется Enterprise аккаунт и Service User API Key)";
+                }
+                return new DevinUsageMetrics { Error = errorMsg };
             }
 
             using var document = JsonDocument.Parse(body);
@@ -131,6 +137,7 @@ public sealed class DevinClient
 
         try
         {
+            // Organization endpoint - доступен для обычных пользователей с правом ViewOrgMetrics
             var url = $"https://api.devin.ai/v3/organizations/{settings.Devin.OrgId}/metrics/sessions";
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -141,7 +148,12 @@ public sealed class DevinClient
 
             if (!response.IsSuccessStatusCode)
             {
-                return new DevinSessionMetrics { Error = $"session metrics {(int)response.StatusCode}" };
+                var errorMsg = $"session metrics {(int)response.StatusCode}";
+                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    errorMsg += " (требуется Service User с правом ViewOrgMetrics)";
+                }
+                return new DevinSessionMetrics { Error = errorMsg };
             }
 
             using var document = JsonDocument.Parse(body);
@@ -206,7 +218,12 @@ public sealed class DevinClient
 
             if (!response.IsSuccessStatusCode)
             {
-                return new DevinCategoryMetrics { Error = $"category metrics {(int)response.StatusCode}" };
+                var errorMsg = $"category metrics {(int)response.StatusCode}";
+                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    errorMsg += " (требуется Enterprise аккаунт и Service User API Key)";
+                }
+                return new DevinCategoryMetrics { Error = errorMsg };
             }
 
             using var document = JsonDocument.Parse(body);
