@@ -581,19 +581,16 @@ public partial class MainWindow : Window
 
         if (budget is null) return;
 
-        if (budget.Spend is not { } spend)
+        if (budget.Error is not null || (budget.Display == BudgetDisplay.Money && budget.Spend is null))
         {
+            var error = budget.Error ?? "нет данных";
             BudgetText.Text = "—";
             BudgetText.Foreground = BudgetMuted;
-            BudgetDetail.Text = budget.Error ?? "нет данных";
-            BudgetText.ToolTip = budget.Error;
-            BudgetDetail.ToolTip = budget.Error;
+            BudgetDetail.Text = error;
+            BudgetText.ToolTip = error;
+            BudgetDetail.ToolTip = error;
             return;
         }
-
-        BudgetText.Text = budget.MaxBudget is { } max
-            ? $"${spend:0.00} / ${max:0.00}"
-            : $"${spend:0.00}";
 
         BudgetText.Foreground = budget.Ratio switch
         {
@@ -603,17 +600,66 @@ public partial class MainWindow : Window
         };
 
         var details = new List<string>();
-        if (budget.Remaining is { } remaining) details.Add($"осталось ${remaining:0.00}");
-        if (budget.ResetAt is { } reset) details.Add($"сброс {reset:dd.MM HH:mm}");
-        BudgetDetail.Text = string.Join(" · ", details);
+        var tooltipLines = new List<string>();
 
-        var tooltip = $"${spend:0.0000}" + (budget.MaxBudget is { } limit ? $" из ${limit:0.00}" : string.Empty);
-        if (budget.ResetAt is { } tooltipReset) tooltip += $"\nсброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}";
-        if (budget.Alias is { } alias) tooltip += $"\nключ: {alias}";
-        tooltip += "\nисточник: " + (budget.SourceUrl ?? BudgetService.KeyInfoUrl(settings.LiteLLMBaseUrl));
+        if (budget.Display == BudgetDisplay.Percent)
+        {
+            var percent = budget.Percent ?? 0;
+            BudgetText.Text = $"{percent:0.0}%";
 
+            if (budget.Plan is { } plan && !string.IsNullOrWhiteSpace(plan)) details.Add(plan);
+            details.AddRange(budget.Meters.Select(meter => $"{meter.Label} {meter.Percent:0.0}%"));
+            if (budget.Meters.Count == 0 && budget.ResetAt is { } reset)
+                details.Add($"сброс {reset:dd.MM HH:mm}");
+
+            tooltipLines.Add($"использовано {percent:0.0}%");
+            AppendMeterTooltip(tooltipLines, budget.Meters);
+            if (budget.Meters.Count == 0 && budget.ResetAt is { } tooltipReset)
+                tooltipLines.Add($"сброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}");
+        }
+        else
+        {
+            var spend = budget.Spend ?? 0;
+            BudgetText.Text = budget.MaxBudget is { } max
+                ? $"${spend:0.00} / ${max:0.00}"
+                : $"${spend:0.00}";
+
+            if (budget.Remaining is { } remaining) details.Add($"осталось ${remaining:0.00}");
+            if (budget.ResetAt is { } reset) details.Add($"сброс {reset:dd.MM HH:mm}");
+            if (budget.Plan is { } plan && !string.IsNullOrWhiteSpace(plan)) details.Add(plan);
+
+            tooltipLines.Add($"${spend:0.0000}" + (budget.MaxBudget is { } limit ? $" из ${limit:0.00}" : string.Empty));
+            if (budget.ResetAt is { } tooltipReset)
+                tooltipLines.Add($"сброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}");
+            if (budget.Meters.Count > 0)
+            {
+                tooltipLines.Add("лимиты OpenCode:");
+                AppendMeterTooltip(tooltipLines, budget.Meters, "  ");
+            }
+        }
+
+        BudgetDetail.Text = details.Count > 0 ? string.Join(" · ", details) : "—";
+
+        if (budget.Alias is { } alias)
+            tooltipLines.Add((budget.Provider == "OpenCode" ? "аккаунт: " : "ключ: ") + alias);
+        if (!string.IsNullOrWhiteSpace(budget.Provider))
+            tooltipLines.Add("источник: " + budget.Provider);
+        tooltipLines.Add("адрес: " + (budget.SourceUrl ?? BudgetService.KeyInfoUrl(settings.LiteLLMBaseUrl)));
+
+        var tooltip = string.Join("\n", tooltipLines);
         BudgetText.ToolTip = tooltip;
         BudgetDetail.ToolTip = tooltip;
+    }
+
+    static void AppendMeterTooltip(List<string> lines, IReadOnlyList<BudgetMeter> meters, string indent = "")
+    {
+        foreach (var meter in meters)
+        {
+            var line = $"{indent}{meter.Title}: {meter.Percent:0.0}%";
+            if (meter.Limited) line += " · лимит исчерпан";
+            if (meter.ResetAt is { } reset) line += $" · сброс {reset:dd.MM.yyyy HH:mm}";
+            lines.Add(line);
+        }
     }
 
     void UpdateCursorBudgetUi()

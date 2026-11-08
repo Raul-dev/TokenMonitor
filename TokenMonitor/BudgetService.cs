@@ -6,6 +6,14 @@ using System.Text.RegularExpressions;
 
 namespace TokenMonitor;
 
+public enum BudgetDisplay
+{
+    Money,
+    Percent,
+}
+
+public sealed record BudgetMeter(string Label, string Title, double Percent, DateTime? ResetAt, bool Limited);
+
 public sealed class BudgetInfo
 {
     public double? Spend { get; init; }
@@ -14,9 +22,20 @@ public sealed class BudgetInfo
     public string? Alias { get; init; }
     public string? Error { get; init; }
     public string? SourceUrl { get; init; }
+    public string? Provider { get; init; }
 
-    public double? Remaining => MaxBudget.HasValue ? Math.Max(0, MaxBudget.Value - (Spend ?? 0)) : null;
-    public double Ratio => MaxBudget is > 0 ? (Spend ?? 0) / MaxBudget.Value : 0;
+    public BudgetDisplay Display { get; init; } = BudgetDisplay.Money;
+    public double? Percent { get; init; }
+    public string? Plan { get; init; }
+    public IReadOnlyList<BudgetMeter> Meters { get; init; } = Array.Empty<BudgetMeter>();
+
+    public double? Remaining => Display == BudgetDisplay.Money && MaxBudget.HasValue
+        ? Math.Max(0, MaxBudget.Value - (Spend ?? 0))
+        : null;
+
+    public double Ratio => Display == BudgetDisplay.Percent
+        ? Math.Clamp((Percent ?? 0) / 100, 0, 1)
+        : MaxBudget is > 0 ? (Spend ?? 0) / MaxBudget.Value : 0;
 }
 
 public interface IBudgetProvider
@@ -36,13 +55,40 @@ public sealed class BudgetService
 
     public AppSettings Settings => settings;
 
-    public IBudgetProvider CreateProvider() => new LiteLlmBudgetProvider(settings);
+    public IBudgetProvider CreateProvider() => settings.BudgetSource switch
+    {
+        BudgetSource.ExternalAPI => new OpenCodeBudgetProvider(settings),
+        _ => new LiteLlmBudgetProvider(settings),
+    };
 
     public string? ResolveApiKey() => new LiteLlmBudgetProvider(settings).ResolveApiKey();
 
     public async Task<BudgetInfo> GetAsync(CancellationToken token = default)
     {
-        var provider = CreateProvider();
+        if (settings.BudgetSource == BudgetSource.Auto)
+        {
+            var openCode = new OpenCodeBudgetProvider(settings);
+            if (openCode.IsAvailable)
+            {
+                var openCodeResult = await FetchAsync(openCode, token);
+                if (openCodeResult.Error is null) return openCodeResult;
+
+                var liteLlmResult = await FetchAsync(new LiteLlmBudgetProvider(settings), token);
+                if (liteLlmResult.Error is null) return liteLlmResult;
+
+                return new BudgetInfo
+                {
+                    Error = $"OpenCode: {openCodeResult.Error}; LiteLLM: {liteLlmResult.Error}",
+                    SourceUrl = openCodeResult.SourceUrl ?? liteLlmResult.SourceUrl,
+                };
+            }
+        }
+
+        return await FetchAsync(CreateProvider(), token);
+    }
+
+    static async Task<BudgetInfo> FetchAsync(IBudgetProvider provider, CancellationToken token)
+    {
         var endpoint = provider.Endpoint;
 
         if (!GlobalRouteHttpClient.CanAccess(endpoint))
@@ -51,6 +97,7 @@ public sealed class BudgetService
             {
                 Error = "внешние запросы запрещены (OnlyByProxy без прокси)",
                 SourceUrl = endpoint.ToString(),
+                Provider = provider is OpenCodeBudgetProvider ? "OpenCode" : "LiteLLM",
             };
         }
 
@@ -107,6 +154,7 @@ public sealed class LiteLlmBudgetProvider : IBudgetProvider
             {
                 Error = $"не найден API-ключ: {settings.OpenCode.ConfigPath}",
                 SourceUrl = endpoint.ToString(),
+                Provider = "LiteLLM",
             };
         }
 
@@ -124,6 +172,7 @@ public sealed class LiteLlmBudgetProvider : IBudgetProvider
                 {
                     Error = $"LiteLLM ответил {(int)response.StatusCode}",
                     SourceUrl = endpoint.ToString(),
+                    Provider = "LiteLLM",
                 };
             }
 
@@ -134,6 +183,7 @@ public sealed class LiteLlmBudgetProvider : IBudgetProvider
                 {
                     Error = "LiteLLM вернул неожиданный ответ",
                     SourceUrl = endpoint.ToString(),
+                    Provider = "LiteLLM",
                 };
             }
 
@@ -165,6 +215,7 @@ public sealed class LiteLlmBudgetProvider : IBudgetProvider
                 ResetAt = reset,
                 Alias = Text("key_alias"),
                 SourceUrl = endpoint.ToString(),
+                Provider = "LiteLLM",
             };
         }
         catch (Exception error)
@@ -173,6 +224,7 @@ public sealed class LiteLlmBudgetProvider : IBudgetProvider
             {
                 Error = error.Message,
                 SourceUrl = endpoint.ToString(),
+                Provider = "LiteLLM",
             };
         }
     }

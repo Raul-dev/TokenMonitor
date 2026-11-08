@@ -12,6 +12,13 @@ public enum DataSource
     Devin
 }
 
+public enum BudgetSource
+{
+    Auto,
+    LiteLLM,
+    ExternalAPI,
+}
+
 public readonly record struct ProviderConfig(
     string Name,
     string ConfigPath,
@@ -54,6 +61,7 @@ public sealed class AppSettings
     // Общие глобальные настройки
     public string LiteLLMBaseUrl { get; set; } = DefaultLiteLLMBaseUrl;
     public string LiteLLMApiKey { get; set; } = string.Empty;
+    public BudgetSource BudgetSource { get; set; } = BudgetSource.Auto;
     public int BudgetRefreshSeconds { get; set; } = 60;
     public bool AlertWindowEnabled { get; set; } = true;
     public int AlertWindowHours { get; set; } = DefaultAlertWindowHours;
@@ -64,7 +72,9 @@ public sealed class AppSettings
     // Конфигурации провайдеров
     public ProviderConfig OpenCode { get; set; } = new(
         Name: "OpenCode",
-        ConfigPath: SettingsStore.DefaultOpencodeConfigPath
+        ConfigPath: SettingsStore.DefaultOpencodeConfigPath,
+        ApiKey: string.Empty,
+        OrgId: string.Empty
     );
 
     public ProviderConfig Cursor { get; set; } = new(
@@ -169,6 +179,7 @@ public static class SettingsStore
     static void Normalize(AppSettings settings)
     {
         if (string.IsNullOrWhiteSpace(settings.LiteLLMBaseUrl)) settings.LiteLLMBaseUrl = AppSettings.DefaultLiteLLMBaseUrl;
+        if (!Enum.IsDefined(settings.BudgetSource)) settings.BudgetSource = BudgetSource.Auto;
         if (settings.BudgetRefreshSeconds < 10) settings.BudgetRefreshSeconds = 10;
         if (settings.AlertWindowHours is < 1 or > 24 * 365) settings.AlertWindowHours = AppSettings.DefaultAlertWindowHours;
 
@@ -199,6 +210,8 @@ public static class SettingsStore
         {
             Name = string.IsNullOrWhiteSpace(config.Name) ? name : config.Name,
             ConfigPath = string.IsNullOrWhiteSpace(config.ConfigPath) ? defaultConfigPath : config.ConfigPath,
+            ApiKey = config.ApiKey?.Trim(),
+            OrgId = config.OrgId?.Trim(),
         };
 
     static void ApplyLegacy(AppSettings settings, string json)
@@ -219,6 +232,18 @@ public static class SettingsStore
                 && TryGetString(root, "ApiKey", out var apiKey))
             {
                 settings.LiteLLMApiKey = apiKey;
+            }
+
+            if (string.IsNullOrWhiteSpace(settings.OpenCode.ApiKey)
+                && TryGetString(root, "OpenCodeApiKey", out var openCodeApiKey))
+            {
+                settings.OpenCode = settings.OpenCode with { ApiKey = openCodeApiKey };
+            }
+
+            if (string.IsNullOrWhiteSpace(settings.OpenCode.OrgId)
+                && TryGetString(root, "OpenCodeOrgId", out var openCodeOrgId))
+            {
+                settings.OpenCode = settings.OpenCode with { OrgId = openCodeOrgId };
             }
 
             if (!root.TryGetProperty(nameof(AppSettings.OpenCode), out _))
