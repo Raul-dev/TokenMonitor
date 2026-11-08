@@ -16,6 +16,7 @@ public sealed class DataSnapshot
     public string EventsPath { get; init; } = string.Empty;
     public string LogPath { get; init; } = string.Empty;
     public DateTime LoadedAt { get; init; }
+    public string LoadError { get; init; } = string.Empty;
 }
 
 public sealed class DataStore
@@ -39,35 +40,50 @@ public sealed class DataStore
         List<SessionData> sessions;
         List<LiveEvent> live;
         long signature;
+        string loadError = string.Empty;
 
         try
         {
             using var connection = Open();
 
-            if (HasTable(connection, "session_v2") && HasTable(connection, "session_message"))
+            var hasV2 = HasTable(connection, "session_v2") && HasTable(connection, "session_message");
+            var hasV1 = HasTable(connection, "session") && HasTable(connection, "message");
+
+            if (hasV2)
             {
                 sessions = LoadSessionsV2(connection);
                 live = LiveFromRequests(sessions);
                 signature = ComputeSignatureV2(connection);
+                loadError = $"V2: {sessions.Count} сессий";
             }
-            else
+            else if (hasV1)
             {
                 sessions = LoadSessions(connection);
                 live = LoadLive();
                 signature = ComputeSignature(connection);
+                loadError = $"V1: {sessions.Count} сессий";
+            }
+            else
+            {
+                sessions = new List<SessionData>();
+                live = LoadLive();
+                signature = 0;
+                loadError = "нет таблиц session/session_v2";
             }
         }
-        catch (Microsoft.Data.Sqlite.SqliteException)
+        catch (Microsoft.Data.Sqlite.SqliteException ex)
         {
             sessions = new List<SessionData>();
             live = LoadLive();
             signature = 0;
+            loadError = $"SQLite ошибка: {ex.Message}";
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             sessions = new List<SessionData>();
             live = LoadLive();
             signature = 0;
+            loadError = $"ошибка: {ex.Message}";
         }
 
         return new DataSnapshot
@@ -79,6 +95,7 @@ public sealed class DataStore
             EventsPath = EventsPath,
             LogPath = LogPath,
             LoadedAt = DateTime.Now,
+            LoadError = loadError,
         };
     }
 

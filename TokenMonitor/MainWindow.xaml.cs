@@ -56,13 +56,30 @@ public partial class MainWindow : Window
         devinStore = new DevinStore(settings);
         SettingsStore.EnsureExists(settings);
 
+        // Формирование подсказки для Devin
+        var devinConfigured = !string.IsNullOrWhiteSpace(settings.Devin.ApiKey) && !string.IsNullOrWhiteSpace(settings.Devin.OrgId);
+        var devinPathText = devinConfigured ? $"Devin API v3 (org: {settings.Devin.OrgId})" : "Devin API не настроен";
+        var devinTreeHint = devinConfigured ? "Статистика использования Devin API v3 по категориям задач." : "Статистика использования Devin API v3. Настройте API ключ и Org ID в конфиге.";
+
         Providers = new Dictionary<string, ProviderConfigEx>
         {
             { "OpenCode", new ProviderConfigEx(settings.OpenCode, DataSource.OpenCode, store.DbPath, "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.") },
             { "Cursor", new ProviderConfigEx(settings.Cursor, DataSource.Cursor, cursorStore.EventsPath, "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.") },
             { "Claude", new ProviderConfigEx(settings.Claude, DataSource.Claude, "Claude - не реализовано", "Claude - не реализовано") },
-            { "Devin", new ProviderConfigEx(settings.Devin, DataSource.Devin, devinStore.IsConfigured ? $"Devin API v3 (org: {settings.Devin.OrgId})" : "Devin API не настроен", "Статистика использования Devin API v3. Настройте API ключ и Org ID в конфиге.") },
+            { "Devin", new ProviderConfigEx(settings.Devin, DataSource.Devin, devinPathText, devinTreeHint) },
         };
+
+        // Диагностика настроек Devin
+        var apiKeyInfo = string.IsNullOrWhiteSpace(settings.Devin.ApiKey) ? "ApiKey: null/empty" : $"ApiKey: {settings.Devin.ApiKey?.Substring(0, Math.Min(20, settings.Devin.ApiKey.Length))}...";
+        var orgIdInfo = string.IsNullOrWhiteSpace(settings.Devin.OrgId) ? "OrgId: null/empty" : $"OrgId: {settings.Devin.OrgId}";
+        var logPath = Path.Combine(Path.GetTempPath(), "tokenmonitor_debug.txt");
+        File.WriteAllText(logPath, $"[{DateTime.Now}] Devin config loaded: {apiKeyInfo}, {orgIdInfo}");
+
+        // Проверка настроек Devin при старте
+        if (!devinConfigured)
+        {
+            StatusText.Text = $"Devin API не настроен: {apiKeyInfo}, {orgIdInfo}";
+        }
         DataContext = this;
 
         LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
@@ -212,6 +229,24 @@ public partial class MainWindow : Window
             {
                 devinSnapshot = await devinStore.LoadAsync();
                 loaded = DevinStore.ToDataSnapshot(devinSnapshot);
+
+                // Обновление подсказки под деревом с ошибками Devin API
+                var errors = new List<string>();
+                if (devinSnapshot.UsageMetrics?.Error is not null)
+                    errors.Add($"usage: {devinSnapshot.UsageMetrics.Error}");
+                if (devinSnapshot.SessionMetrics?.Error is not null)
+                    errors.Add($"session: {devinSnapshot.SessionMetrics.Error}");
+                if (devinSnapshot.CategoryMetrics?.Error is not null)
+                    errors.Add($"category: {devinSnapshot.CategoryMetrics.Error}");
+
+                if (errors.Count > 0)
+                {
+                    TreeHint.Text = $"Devin API: {string.Join("; ", errors)}";
+                }
+                else
+                {
+                    TreeHint.Text = "Статистика использования Devin API v3 по категориям задач.";
+                }
             }
             else
             {
@@ -240,7 +275,36 @@ public partial class MainWindow : Window
             UpdateAlerts(loaded);
 
             var requests = loaded.Sessions.Sum(s => s.Requests.Count);
-            if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
+
+            if (!string.IsNullOrWhiteSpace(loaded.LoadError))
+            {
+                StatusText.Text = $"загрузка: {loaded.LoadError} · сессий {loaded.Sessions.Count} · запросов {requests}";
+            }
+            else if (currentSource == DataSource.Devin && devinSnapshot is not null)
+            {
+                // Показать ошибки Devin API
+                var errors = new List<string>();
+                if (devinSnapshot.UsageMetrics?.Error is not null)
+                    errors.Add($"usage: {devinSnapshot.UsageMetrics.Error}");
+                if (devinSnapshot.SessionMetrics?.Error is not null)
+                    errors.Add($"session: {devinSnapshot.SessionMetrics.Error}");
+                if (devinSnapshot.CategoryMetrics?.Error is not null)
+                    errors.Add($"category: {devinSnapshot.CategoryMetrics.Error}");
+
+                if (errors.Count > 0)
+                {
+                    StatusText.Text = $"Devin API: {string.Join("; ", errors)} · сессий {loaded.Sessions.Count}";
+                }
+                else if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
+                {
+                    // Keep the error message
+                }
+                else
+                {
+                    StatusText.Text = $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
+                }
+            }
+            else if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
             {
                 // Keep the error message
             }
@@ -251,7 +315,10 @@ public partial class MainWindow : Window
 
             if (currentSource == DataSource.OpenCode && loaded.Sessions.Count == 0 && File.Exists(store.DbPath))
             {
-                StatusText.Text = "База opencode пуста. Запустите opencode и выполните хотя бы один запрос.";
+                if (string.IsNullOrWhiteSpace(loaded.LoadError))
+                {
+                    StatusText.Text = "База opencode пуста. Запустите opencode и выполните хотя бы один запрос.";
+                }
             }
 
             if (currentSource == DataSource.OpenCode)

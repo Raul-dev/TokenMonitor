@@ -19,15 +19,16 @@ public enum BudgetSource
     ExternalAPI,
 }
 
-public readonly record struct ProviderConfig(
-    string Name,
-    string ConfigPath,
-    bool IsEnabled = true,
-    string? StateDbPath = null,
-    string? EventsPath = null,
-    string? ApiKey = null,
-    string? OrgId = null
-);
+public sealed class ProviderConfig
+{
+    public string Name { get; set; } = string.Empty;
+    public string ConfigPath { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; } = true;
+    public string? StateDbPath { get; set; }
+    public string? EventsPath { get; set; }
+    public string? ApiKey { get; set; }
+    public string? OrgId { get; set; }
+}
 
 public sealed class ProviderConfigEx
 {
@@ -70,33 +71,37 @@ public sealed class AppSettings
     public ProxySettings ProxySettings { get; set; } = new();
 
     // Конфигурации провайдеров
-    public ProviderConfig OpenCode { get; set; } = new(
-        Name: "OpenCode",
-        ConfigPath: SettingsStore.DefaultOpencodeConfigPath,
-        ApiKey: string.Empty,
-        OrgId: string.Empty
-    );
+    public ProviderConfig OpenCode { get; set; } = new()
+    {
+        Name = "OpenCode",
+        ConfigPath = SettingsStore.DefaultOpencodeConfigPath,
+        ApiKey = string.Empty,
+        OrgId = string.Empty
+    };
 
-    public ProviderConfig Cursor { get; set; } = new(
-        Name: "Cursor",
-        ConfigPath: SettingsStore.DefaultCursorConfigPath,
-        IsEnabled: false,
-        StateDbPath: string.Empty,
-        EventsPath: string.Empty
-    );
+    public ProviderConfig Cursor { get; set; } = new()
+    {
+        Name = "Cursor",
+        ConfigPath = SettingsStore.DefaultCursorConfigPath,
+        IsEnabled = false,
+        StateDbPath = string.Empty,
+        EventsPath = string.Empty
+    };
 
-    public ProviderConfig Claude { get; set; } = new(
-        Name: "Claude",
-        ConfigPath: SettingsStore.DefaultClaudeConfigPath,
-        IsEnabled: false
-    );
+    public ProviderConfig Claude { get; set; } = new()
+    {
+        Name = "Claude",
+        ConfigPath = SettingsStore.DefaultClaudeConfigPath,
+        IsEnabled = false
+    };
 
-    public ProviderConfig Devin { get; set; } = new(
-        Name: "Devin",
-        ConfigPath: SettingsStore.DefaultDevinConfigPath,
-        ApiKey: string.Empty,
-        OrgId: string.Empty
-    );
+    public ProviderConfig Devin { get; set; } = new()
+    {
+        Name = "Devin",
+        ConfigPath = SettingsStore.DefaultDevinConfigPath,
+        ApiKey = string.Empty,
+        OrgId = string.Empty
+    };
 
     public ProviderConfig For(DataSource source) => source switch
     {
@@ -205,14 +210,17 @@ public static class SettingsStore
     static void ApplyRuntime(AppSettings settings) =>
         GlobalRouteHttpClient.ProxySettings = settings.ProxySettings;
 
-    static ProviderConfig EnsureProvider(ProviderConfig config, string name, string defaultConfigPath) =>
-        config with
-        {
-            Name = string.IsNullOrWhiteSpace(config.Name) ? name : config.Name,
-            ConfigPath = string.IsNullOrWhiteSpace(config.ConfigPath) ? defaultConfigPath : config.ConfigPath,
-            ApiKey = config.ApiKey?.Trim(),
-            OrgId = config.OrgId?.Trim(),
-        };
+    static ProviderConfig EnsureProvider(ProviderConfig config, string name, string defaultConfigPath)
+    {
+        if (config is null) config = new ProviderConfig();
+        
+        if (string.IsNullOrWhiteSpace(config.Name)) config.Name = name;
+        if (string.IsNullOrWhiteSpace(config.ConfigPath)) config.ConfigPath = defaultConfigPath;
+        config.ApiKey = config.ApiKey?.Trim();
+        config.OrgId = config.OrgId?.Trim();
+        
+        return config;
+    }
 
     static void ApplyLegacy(AppSettings settings, string json)
     {
@@ -237,19 +245,19 @@ public static class SettingsStore
             if (string.IsNullOrWhiteSpace(settings.OpenCode.ApiKey)
                 && TryGetString(root, "OpenCodeApiKey", out var openCodeApiKey))
             {
-                settings.OpenCode = settings.OpenCode with { ApiKey = openCodeApiKey };
+                settings.OpenCode.ApiKey = openCodeApiKey;
             }
 
             if (string.IsNullOrWhiteSpace(settings.OpenCode.OrgId)
                 && TryGetString(root, "OpenCodeOrgId", out var openCodeOrgId))
             {
-                settings.OpenCode = settings.OpenCode with { OrgId = openCodeOrgId };
+                settings.OpenCode.OrgId = openCodeOrgId;
             }
 
             if (!root.TryGetProperty(nameof(AppSettings.OpenCode), out _))
             {
                 var path = FirstNonEmpty(root, "ConfigOpenCode", "OpencodeConfigPath");
-                if (path is not null) settings.OpenCode = settings.OpenCode with { ConfigPath = path };
+                if (path is not null) settings.OpenCode.ConfigPath = path;
             }
 
             if (!root.TryGetProperty(nameof(AppSettings.Cursor), out _))
@@ -259,19 +267,16 @@ public static class SettingsStore
                 var events = FirstNonEmpty(root, "CursorEventsPath");
                 if (path is not null || stateDb is not null || events is not null)
                 {
-                    settings.Cursor = settings.Cursor with
-                    {
-                        ConfigPath = path ?? settings.Cursor.ConfigPath,
-                        StateDbPath = stateDb ?? settings.Cursor.StateDbPath,
-                        EventsPath = events ?? settings.Cursor.EventsPath,
-                    };
+                    if (path is not null) settings.Cursor.ConfigPath = path;
+                    if (stateDb is not null) settings.Cursor.StateDbPath = stateDb;
+                    if (events is not null) settings.Cursor.EventsPath = events;
                 }
             }
 
             if (!root.TryGetProperty(nameof(AppSettings.Claude), out _))
             {
                 var path = FirstNonEmpty(root, "ConfigClaude");
-                if (path is not null) settings.Claude = settings.Claude with { ConfigPath = path };
+                if (path is not null) settings.Claude.ConfigPath = path;
             }
 
             if (!root.TryGetProperty(nameof(AppSettings.Devin), out _))
@@ -281,12 +286,9 @@ public static class SettingsStore
                 var orgId = FirstNonEmpty(root, "DevinOrgId");
                 if (path is not null || devinKey is not null || orgId is not null)
                 {
-                    settings.Devin = settings.Devin with
-                    {
-                        ConfigPath = path ?? settings.Devin.ConfigPath,
-                        ApiKey = devinKey ?? settings.Devin.ApiKey,
-                        OrgId = orgId ?? settings.Devin.OrgId,
-                    };
+                    if (path is not null) settings.Devin.ConfigPath = path;
+                    if (devinKey is not null) settings.Devin.ApiKey = devinKey;
+                    if (orgId is not null) settings.Devin.OrgId = orgId;
                 }
             }
         }
