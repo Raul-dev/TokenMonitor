@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using TokenMonitor.Proxy;
 
 namespace TokenMonitor;
 
@@ -21,6 +22,10 @@ public partial class MainWindow : Window
     readonly AppSettings settings;
     readonly BudgetService budgetService;
     readonly DispatcherTimer timer;
+    readonly DispatcherTimer proxyTimer;
+
+    ProxyServer? localProxy;
+    CancellationTokenSource? localProxyCts;
 
     DataSnapshot? snapshot;
     BudgetInfo? budget;
@@ -61,21 +66,109 @@ public partial class MainWindow : Window
         DataContext = this;
 
         LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
-        ConfigLink.ToolTip = SettingsStore.SettingsPath;
+        SourceConfigLink.ToolTip = SettingsStore.SettingsPath;
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         timer.Tick += async (_, _) => await RefreshAsync();
+
+        proxyTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        proxyTimer.Tick += (_, _) => UpdateProxyTraffic();
 
         Loaded += async (_, _) =>
         {
             UpdateComboBoxSelection();
             ApplySourceChrome();
             sourceReady = true;
+            StartLocalProxy();
+            proxyTimer.Start();
             await RefreshAsync();
             timer.Start();
         };
 
-        Closed += (_, _) => timer.Stop();
+        Closed += (_, _) =>
+        {
+            timer.Stop();
+            proxyTimer.Stop();
+            StopLocalProxy();
+        };
     }
+
+    void StartLocalProxy()
+    {
+        if (!settings.LocalProxyServerEnabled)
+        {
+            ProxyTrafficText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (localProxy is not null)
+            return;
+
+        var proxySettings = settings.ProxySettings;
+        var listenUrl = string.IsNullOrWhiteSpace(proxySettings.ListenUrl)
+            ? ProxySettings.DefaultListenUrl
+            : proxySettings.ListenUrl;
+        var upstream = proxySettings.CreateUpstream();
+
+        var server = new ProxyServer(listenUrl, upstream);
+        var cts = new CancellationTokenSource();
+        localProxy = server;
+        localProxyCts = cts;
+
+        ProxyTrafficText.Visibility = Visibility.Visible;
+        ProxyTrafficText.ToolTip = BuildProxyTooltip(listenUrl, upstream);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await server.RunAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception error)
+            {
+                await Dispatcher.InvokeAsync(() => StatusText.Text = $"локальный прокси: {error.Message}");
+            }
+        });
+
+        UpdateProxyTraffic();
+    }
+
+    void StopLocalProxy()
+    {
+        try
+        {
+            localProxyCts?.Cancel();
+        }
+        catch
+        {
+        }
+
+        localProxyCts?.Dispose();
+        localProxyCts = null;
+        localProxy = null;
+    }
+
+    void UpdateProxyTraffic()
+    {
+        if (localProxy is not { } proxy)
+            return;
+
+        ProxyTrafficText.Text = $"↑ {FormatMb(proxy.BytesSent)} · ↓ {FormatMb(proxy.BytesReceived)} МБ";
+
+        var upstream = settings.ProxySettings.CreateUpstream();
+        ProxyTrafficText.ToolTip =
+            BuildProxyTooltip(settings.ProxySettings.ListenUrl, upstream) +
+            (proxy.IsRunning ? "\nстатус: работает" : "\nстатус: не запущен");
+    }
+
+    static string FormatMb(long bytes) => (bytes / 1024d / 1024d).ToString("0.00");
+
+    static string BuildProxyTooltip(string listenUrl, ProxySettings? upstream) =>
+        upstream is null
+            ? $"локальный прокси: {listenUrl}\nupstream: напрямую"
+            : $"локальный прокси: {listenUrl}\nupstream: {upstream.Scheme}://{upstream.Host}:{upstream.Port}";
 
     async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
@@ -144,6 +237,7 @@ public partial class MainWindow : Window
 
             UpdateLive(loaded);
             UpdateKpi();
+            UpdateAlerts(loaded);
 
             var requests = loaded.Sessions.Sum(s => s.Requests.Count);
             if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
@@ -293,6 +387,109 @@ public partial class MainWindow : Window
             .ToList();
     }
 
+    const long AlertContextLimit = 150_000;
+    const int AlertStepLimit = 40;
+    const long AlertCacheInputLimit = 100_000;
+    const long AlertSessionLimit = 100_000_000;
+
+    void UpdateAlerts(DataSnapshot loaded)
+    {
+        if (!settings.AlertWindowEnabled)
+        {
+            AlertsList.ItemsSource = null;
+            AlertsPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var alerts = new List<AlertInfo>();
+        var cutoff = DateTime.Now.AddHours(-settings.AlertWindowHours);
+        var sessions = loaded.Sessions
+            .Where(session => session.Updated >= cutoff)
+            .OrderByDescending(session => session.Updated)
+            .ToList();
+
+        var contextHits = sessions
+            .Where(session => session.MaxContext > AlertContextLimit)
+            .OrderByDescending(session => session.MaxContext)
+            .ToList();
+
+        if (contextHits.Count > 0)
+        {
+            var top = contextHits[0];
+            alerts.Add(new AlertInfo
+            {
+                Text = $"Контекст > {Fmt.Tokens(AlertContextLimit)}: {contextHits.Count} сесс. · макс. {Fmt.Tokens(top.MaxContext)} · {SessionLabel(top)}",
+                Detail = AlertDetails(contextHits.Select(session => $"{SessionLabel(session)}: {Fmt.Tokens(session.MaxContext)}")),
+                Critical = true,
+            });
+        }
+
+        var stepHits = sessions
+            .Where(session => session.MaxSteps > AlertStepLimit)
+            .OrderByDescending(session => session.MaxSteps)
+            .ToList();
+
+        if (stepHits.Count > 0)
+        {
+            var top = stepHits[0];
+            alerts.Add(new AlertInfo
+            {
+                Text = $"Шагов > {AlertStepLimit}: {stepHits.Count} сесс. · макс. {top.MaxSteps} · {SessionLabel(top)}",
+                Detail = AlertDetails(stepHits.Select(session => $"{SessionLabel(session)}: {session.MaxSteps} шагов")),
+            });
+        }
+
+        var cacheHits = sessions
+            .Where(session => session.Tokens.Input > AlertCacheInputLimit && session.Tokens.CacheRead == 0)
+            .OrderByDescending(session => session.Tokens.Input)
+            .ToList();
+
+        if (cacheHits.Count > 0)
+        {
+            var top = cacheHits[0];
+            alerts.Add(new AlertInfo
+            {
+                Text = $"cacheRead=0 при input > {Fmt.Tokens(AlertCacheInputLimit)}: {cacheHits.Count} сесс. · макс. {Fmt.Tokens(top.Tokens.Input)} · {SessionLabel(top)}",
+                Detail = AlertDetails(cacheHits.Select(session => $"{SessionLabel(session)}: input {Fmt.Tokens(session.Tokens.Input)}")),
+            });
+        }
+
+        var bigSessions = sessions
+            .Where(session => session.Tokens.Total > AlertSessionLimit)
+            .OrderByDescending(session => session.Tokens.Total)
+            .ToList();
+
+        if (bigSessions.Count > 0)
+        {
+            var top = bigSessions[0];
+            alerts.Add(new AlertInfo
+            {
+                Text = $"Сессия > {Fmt.Tokens(AlertSessionLimit)}: {bigSessions.Count} · макс. {Fmt.Tokens(top.Tokens.Total)} · {SessionLabel(top)}",
+                Detail = AlertDetails(bigSessions.Select(session => $"{SessionLabel(session)}: {Fmt.Tokens(session.Tokens.Total)}")),
+                Critical = true,
+            });
+        }
+
+        AlertsTitle.Text = $"АЛЕРТЫ · {settings.AlertWindowHours} ч";
+        AlertsPanel.ToolTip = $"Сессии, обновлённые за последние {settings.AlertWindowHours} ч";
+        AlertsList.ItemsSource = alerts;
+        AlertsPanel.Visibility = alerts.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    static string SessionLabel(SessionData session)
+    {
+        var title = string.IsNullOrWhiteSpace(session.Title) ? session.Id : session.Title;
+        return Fmt.Preview(title, 55);
+    }
+
+    static string AlertDetails(IEnumerable<string> items)
+    {
+        var all = items.ToList();
+        var lines = all.Take(8).ToList();
+        if (all.Count > lines.Count) lines.Add($"… ещё {all.Count - lines.Count}");
+        return string.Join("\n", lines);
+    }
+
     void UpdateKpi()
     {
         if (snapshot is null) return;
@@ -336,10 +533,10 @@ public partial class MainWindow : Window
         }
 
         MonthTotal.Text = Fmt.Tokens(month.Total);
-        MonthDetail.Text = $"{monthRequests} запр · {monthSessions} сесс · in {Fmt.Tokens(month.Input)} / out {Fmt.Tokens(month.Output)}";
+        MonthDetail.Text = $"{monthRequests} запр · {monthSessions} сесс · in {Fmt.Tokens(month.Input)} / out {Fmt.Tokens(month.Output)} · кэш {month.CacheHitText}";
 
         DayTotal.Text = Fmt.Tokens(day.Total);
-        DayDetail.Text = $"{dayRequests} запр · {daySessions} сесс · {now:dd.MM.yyyy}";
+        DayDetail.Text = $"{dayRequests} запр · {daySessions} сесс · {now:dd.MM.yyyy} · кэш {day.CacheHitText}";
 
         var focusSession = SessionOf(selected) ?? snapshot.Sessions.OrderByDescending(s => s.Updated).FirstOrDefault();
 
@@ -353,7 +550,7 @@ public partial class MainWindow : Window
         }
 
         SessionTotal.Text = Fmt.Tokens(focusSession.Tokens.Total);
-        SessionDetail.Text = $"{focusSession.Requests.Count} запр · {Fmt.Duration(focusSession.DurationMs)} · {Fmt.Folder(focusSession.Directory)}";
+        SessionDetail.Text = $"{focusSession.Requests.Count} запр · {Fmt.Duration(focusSession.DurationMs)} · кэш {focusSession.Tokens.CacheHitText} · {Fmt.Folder(focusSession.Directory)}";
 
         var focusRequest = RequestOf(selected) ?? focusSession.Requests.LastOrDefault();
 
@@ -365,7 +562,7 @@ public partial class MainWindow : Window
         }
 
         RequestTotal.Text = Fmt.Tokens(focusRequest.Tokens.Total);
-        RequestDetail.Text = $"шагов {focusRequest.Steps.Count} · {Fmt.Duration(focusRequest.DurationMs)} · in {Fmt.Tokens(focusRequest.Tokens.Input)} / out {Fmt.Tokens(focusRequest.Tokens.Output)}";
+        RequestDetail.Text = $"шагов {focusRequest.Steps.Count} · {Fmt.Duration(focusRequest.DurationMs)} · in {Fmt.Tokens(focusRequest.Tokens.Input)} / out {Fmt.Tokens(focusRequest.Tokens.Output)} · кэш {focusRequest.Tokens.CacheHitText} / W {focusRequest.Tokens.CacheWriteText}";
     }
 
     void UpdateBudgetUi()
@@ -413,7 +610,7 @@ public partial class MainWindow : Window
         var tooltip = $"${spend:0.0000}" + (budget.MaxBudget is { } limit ? $" из ${limit:0.00}" : string.Empty);
         if (budget.ResetAt is { } tooltipReset) tooltip += $"\nсброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}";
         if (budget.Alias is { } alias) tooltip += $"\nключ: {alias}";
-        tooltip += "\nисточник: " + settings.LiteLLMBaseUrl.TrimEnd('/') + "/key/info";
+        tooltip += "\nисточник: " + (budget.SourceUrl ?? BudgetService.KeyInfoUrl(settings.LiteLLMBaseUrl));
 
         BudgetText.ToolTip = tooltip;
         BudgetDetail.ToolTip = tooltip;
@@ -549,37 +746,13 @@ public partial class MainWindow : Window
         var session = SessionOf(selected);
         var enabled = session is not null && Directory.Exists(session.Directory);
 
-        OpenInAppItem.IsEnabled = enabled;
         ResumeTuiItem.IsEnabled = enabled;
         ResumeForkItem.IsEnabled = enabled;
         CopySessionIdItem.IsEnabled = session is not null;
 
         ResumeTuiItem.ToolTip = enabled ? $"opencode -s {session!.Id}" : "нужна сессия с существующим каталогом";
         ResumeForkItem.ToolTip = enabled ? $"opencode -s {session!.Id} --fork" : "нужна сессия с существующим каталогом";
-        OpenInAppItem.ToolTip = enabled
-            ? $"{OpenProjectUrl(session!)}\nприложение откроет проект; сессию выберет само (deep link на сессию не поддерживается)"
-            : "нужна сессия с существующим каталогом";
     }
-
-    void OpenInApp_Click(object sender, RoutedEventArgs e)
-    {
-        if (SessionOf(selected) is not { } session) return;
-
-        var url = OpenProjectUrl(session);
-
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            StatusText.Text = $"OpenCode открыт на проекте {session.Directory} (сессию выбирает приложение)";
-        }
-        catch (Exception error)
-        {
-            StatusText.Text = $"не удалось открыть проект: {error.Message}";
-        }
-    }
-
-    static string OpenProjectUrl(SessionData session) =>
-        "opencode://open-project?directory=" + Uri.EscapeDataString(session.Directory.Replace('\\', '/'));
 
     void ResumeTui_Click(object sender, RoutedEventArgs e) => LaunchTui(fork: false);
 
@@ -761,5 +934,6 @@ public partial class MainWindow : Window
         if (CurrentProvider() is not { } provider) return;
         DbPathText.Text = provider.PathText;
         TreeHint.Text = provider.TreeHint;
+        ConfigLink.ToolTip = provider.ConfigPath;
     }
 }

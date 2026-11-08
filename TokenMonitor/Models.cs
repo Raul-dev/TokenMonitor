@@ -10,6 +10,11 @@ public readonly record struct TokenCounts(long Input, long Output, long Reasonin
 
     public long Total => Input + Output + Reasoning + CacheRead + CacheWrite;
     public long Cached => CacheRead + CacheWrite;
+    public long CacheHitBase => Input + CacheRead;
+    public double CacheHitPercent => CacheHitBase == 0 ? 0 : CacheRead * 100.0 / CacheHitBase;
+
+    public string CacheHitText => CacheHitBase == 0 ? "—" : $"{CacheHitPercent:0.0}%";
+    public string CacheWriteText => CacheWrite == 0 ? "—" : Fmt.Tokens(CacheWrite);
 
     public static TokenCounts operator +(TokenCounts a, TokenCounts b) => new(
         a.Input + b.Input,
@@ -17,6 +22,13 @@ public readonly record struct TokenCounts(long Input, long Output, long Reasonin
         a.Reasoning + b.Reasoning,
         a.CacheRead + b.CacheRead,
         a.CacheWrite + b.CacheWrite);
+}
+
+public sealed class AlertInfo
+{
+    public string Text { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+    public bool Critical { get; init; }
 }
 
 public abstract class Node : INotifyPropertyChanged
@@ -35,10 +47,9 @@ public abstract class Node : INotifyPropertyChanged
     public string InputText => Tokens.Input == 0 ? "—" : Fmt.Tokens(Tokens.Input);
     public string OutputText => Tokens.Output == 0 ? "—" : Fmt.Tokens(Tokens.Output);
     public string ReasoningText => Tokens.Reasoning == 0 ? "—" : Fmt.Tokens(Tokens.Reasoning);
-    public string CacheText => Tokens.Cached == 0 ? "—" : Fmt.Tokens(Tokens.Cached);
     public string ExactText =>
         $"вход {Fmt.Exact(Tokens.Input)} · выход {Fmt.Exact(Tokens.Output)} · reasoning {Fmt.Exact(Tokens.Reasoning)}\n" +
-        $"кэш чтение {Fmt.Exact(Tokens.CacheRead)} · кэш запись {Fmt.Exact(Tokens.CacheWrite)}\n" +
+        $"кэш чтение {Fmt.Exact(Tokens.CacheRead)} · кэш запись {Fmt.Exact(Tokens.CacheWrite)} · hit {Tokens.CacheHitText}\n" +
         $"итого {Fmt.Exact(Tokens.Total)}";
 
     public bool IsExpanded
@@ -92,6 +103,8 @@ public sealed class SessionData
 
     public bool IsChild => ParentId.Length != 0;
     public long DurationMs => (long)(Updated - Created).TotalMilliseconds;
+    public long MaxContext => Requests.Count == 0 ? 0 : Requests.Max(request => request.Context);
+    public int MaxSteps => Requests.Count == 0 ? 0 : Requests.Max(request => request.Steps.Count);
 }
 
 public sealed class RequestData
@@ -107,6 +120,10 @@ public sealed class RequestData
     public long DurationMs => Steps.Count == 0
         ? 0
         : (long)(Steps[^1].Completed - Time).TotalMilliseconds;
+
+    public long Context => Steps.Count == 0
+        ? 0
+        : Steps[^1].Tokens.Input + Steps[^1].Tokens.CacheRead;
 }
 
 public sealed class StepData
@@ -142,9 +159,10 @@ public sealed class LiveEvent
     public string DurationText => Fmt.Duration(DurationMs);
     public string StepsText => Steps.ToString();
     public string SessionText => SessionId.Replace("ses_", "");
+    public string CacheHitText => new TokenCounts(Input, Output, Reasoning, CacheRead, CacheWrite).CacheHitText;
     public string ExactText =>
         $"запрос: {Time:dd.MM.yyyy HH:mm:ss}\n" +
         $"вход {Fmt.Exact(Input)} · выход {Fmt.Exact(Output)} · reasoning {Fmt.Exact(Reasoning)}\n" +
-        $"кэш чтение {Fmt.Exact(CacheRead)} · кэш запись {Fmt.Exact(CacheWrite)}\n" +
+        $"кэш чтение {Fmt.Exact(CacheRead)} · кэш запись {Fmt.Exact(CacheWrite)} · hit {CacheHitText}\n" +
         $"итого {Fmt.Exact(Billed)} · контекст {Fmt.Exact(Context)} · шагов {Steps}";
 }

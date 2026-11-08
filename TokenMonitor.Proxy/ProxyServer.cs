@@ -20,7 +20,6 @@ namespace TokenMonitor.Proxy
     {
         private readonly string _listenUrl;
         private readonly ProxySettings? _upstreamProxy;
-        private readonly CancellationToken _externalCt;
         private readonly HashSet<string> _hopByHopHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
@@ -29,13 +28,22 @@ namespace TokenMonitor.Proxy
 
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
-        private bool _hasConnection;
+        private volatile bool _hasConnection;
+        private volatile bool _isRunning;
+        private long _bytesSent;
+        private long _bytesReceived;
 
         public ProxyServer(string listenUrl, ProxySettings? upstreamProxy)
         {
             _listenUrl = listenUrl;
             _upstreamProxy = upstreamProxy;
         }
+
+        public long BytesSent => Interlocked.Read(ref _bytesSent);
+
+        public long BytesReceived => Interlocked.Read(ref _bytesReceived);
+
+        public bool IsRunning => _isRunning;
 
         public async Task RunAsync(CancellationToken externalCt = default)
         {
@@ -79,6 +87,7 @@ namespace TokenMonitor.Proxy
             }
 
             Log.Information("TokenMonitor.Proxy запущен на {Url}. Ожидание подключений... (Ctrl+C для остановки)", _listenUrl);
+            _isRunning = true;
 
             _cts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
             Console.CancelKeyPress += (s, e) => { e.Cancel = true; _cts.Cancel(); };
@@ -101,16 +110,14 @@ namespace TokenMonitor.Proxy
                 }
             });
 
-            using var forwarderClient = _upstreamProxy?.WebProxyObject != null
+            var httpProxy = _upstreamProxy?.HttpProxy;
+            using var forwarderClient = httpProxy != null
                 ? new HttpClient(new HttpClientHandler
                 {
-                    Proxy = _upstreamProxy.WebProxyObject,
+                    Proxy = httpProxy,
                     UseProxy = true
                 })
                 : new HttpClient();
-
-            if (_upstreamProxy?.WebProxyObject != null)
-                _upstreamProxy.WebProxyObject.BypassProxyOnLocal = true;
 
             try
             {
@@ -129,6 +136,7 @@ namespace TokenMonitor.Proxy
             }
             finally
             {
+                _isRunning = false;
                 _listener.Stop();
                 Log.Information("TokenMonitor.Proxy остановлен.");
             }
@@ -173,8 +181,8 @@ namespace TokenMonitor.Proxy
                         await stream.WriteAsync(ok, _cts.Token);
                         await stream.FlushAsync(_cts.Token);
 
-                        var c2t = stream.CopyToAsync(targetStream, _cts.Token);
-                        var t2c = targetStream.CopyToAsync(stream, _cts.Token);
+                        var c2t = CopyCountedAsync(stream, targetStream, AddSentBytes, _cts.Token);
+                        var t2c = CopyCountedAsync(targetStream, stream, AddReceivedBytes, _cts.Token);
                         await Task.WhenAny(c2t, t2c);
                         Log.Debug("{Host}:{Port} OK", host, port);
                     }
@@ -221,6 +229,7 @@ namespace TokenMonitor.Proxy
                 if (bodyBytes.Length > 0)
                 {
                     Log.Information("[TokenMonitor] Перехвачен HTTP запрос! Длина: {Length} симв.", bodyBytes.Length);
+                    AddSentBytes(bodyBytes.Length);
                 }
 
                 var forwardMessage = new HttpRequestMessage(new HttpMethod(method), targetUrl);
@@ -278,8 +287,11 @@ namespace TokenMonitor.Proxy
                 }
                 sb.Append("Connection: close\r\n");
                 sb.Append("\r\n");
-                await stream.WriteAsync(Encoding.ASCII.GetBytes(sb.ToString()), _cts.Token);
-                await responseMessage.Content.CopyToAsync(stream, _cts.Token);
+                var responseHeaders = Encoding.ASCII.GetBytes(sb.ToString());
+                await stream.WriteAsync(responseHeaders, _cts.Token);
+                AddReceivedBytes(responseHeaders.Length);
+                await using (var responseStream = await responseMessage.Content.ReadAsStreamAsync(_cts.Token))
+                    await CopyCountedAsync(responseStream, stream, AddReceivedBytes, _cts.Token);
                 await stream.FlushAsync(_cts.Token);
                 Log.Debug("{Url} -> {StatusCode}", targetUrl, (int)responseMessage.StatusCode);
             }
@@ -305,12 +317,14 @@ namespace TokenMonitor.Proxy
             {
                 using var setupCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
 
-                bool isLocal = IsLocalOrLoopbackHost(host);
+                bool bypassed = _upstreamProxy?.ShouldBypass(host) ?? false;
+                bool isLocal = IsLocalOrLoopbackHost(host) || bypassed;
 
                 if (_upstreamProxy == null || isLocal)
                 {
                     if (isLocal && _upstreamProxy != null)
-                        Log.Information("[Proxy] Локальный адрес {Host}:{Port} обнаружен. Подключение НАПРЯМУЮ в обход Chain Proxy.", host, port);
+                        Log.Information("[Proxy] Адрес {Host}:{Port} {Reason}. Подключение НАПРЯМУЮ в обход Chain Proxy.",
+                            host, port, bypassed ? "в bypass-списке" : "локальный");
 
                     await client.ConnectAsync(host, port, setupCts.Token);
                     return (client, client.GetStream());
@@ -622,6 +636,33 @@ namespace TokenMonitor.Proxy
                 await writer.CompleteAsync(ex);
             }
         }
+
+        private async Task CopyCountedAsync(Stream source, Stream destination, Action<long> count, CancellationToken ct)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(81920);
+            try
+            {
+                while (true)
+                {
+                    var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+                    if (read == 0)
+                        break;
+
+                    count(read);
+                    await destination.WriteAsync(buffer.AsMemory(0, read), ct);
+                }
+
+                await destination.FlushAsync(ct);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        private void AddSentBytes(long value) => Interlocked.Add(ref _bytesSent, value);
+
+        private void AddReceivedBytes(long value) => Interlocked.Add(ref _bytesReceived, value);
 
         private bool IsHopByHopHeader(string name) => _hopByHopHeaders.Contains(name);
 

@@ -3,32 +3,134 @@
 WPF-приложение для контроля расхода токенов opencode: за месяц, за день, за сессию, за запрос.
 Дерево «сессия → запрос → шаг» раскрывается кликом, справа — живая лента последних запросов.
 
-## Установка в opencode
+## Быстрая установка
 
-Историю приложение читает из базы opencode, а «живую ленту» — из лога плагина.
-Плагин лежит в проекте: `OpenCodeSetup\token-stats.ts`. Устанавливается одной командой:
+1. Установите .NET 10 SDK (для готового exe достаточно .NET Desktop Runtime 10) и запустите
+   `.\run.ps1` или `dotnet run`.
+2. При первом запуске создаётся `%APPDATA%\TokenMonitor\settings.json`; откройте его по ссылке
+   **конфиг** в верхней полосе.
+3. Подключите бюджет LiteLLM и локальный домен:
+
+```json
+{
+  "LiteLLMBaseUrl": "https://litellm.mydomain.loc",
+  "LiteLLMApiKey": "",
+  "ProxySettings": {
+    "BypassList": ["litellm.mydomain.loc"]
+  }
+}
+```
+
+`LiteLLMBaseUrl` — адрес LiteLLM (можно с `/v1`); `BypassList` — домены, которые не должны
+идти через внешний прокси. Замените `litellm.mydomain.loc` на ваш локальный домен LiteLLM.
+Если внешний прокси не нужен, `ProxySettings` можно не указывать; для локального прокси
+см. следующий раздел.
+
+Ключ обычно подхватывается из конфига OpenCode; при необходимости задайте `LiteLLMApiKey`,
+`MYDOMAIN_API_KEY` или `LITELLM_API_KEY`.
+
+4. Установите плагины OpenCode (OpenCode должен хотя бы раз запускаться) и перезапустите его:
 
 ```powershell
-.\install.ps1              # установить или обновить
+.\install.ps1
+```
+
+Бюджет появится в верхней полосе, история и живая лента — из данных OpenCode.
+
+## Прокси для OpenCode
+
+Локальный прокси нужен, если требуется видеть HTTP-трафик OpenCode или направить его через
+внешний прокси. Для подсчёта токенов и бюджета он не обязателен.
+
+1. В `%APPDATA%\TokenMonitor\settings.json` включите локальный сервер:
+
+```json
+"LocalProxyServerEnabled": true,
+"ProxySettings": {
+  "ListenUrl": "http://127.0.0.1:8181",
+  "UpstreamUrl": "",
+  "BypassList": ["litellm.mydomain.loc"]
+}
+```
+
+`ListenUrl` — адрес, который слушает TokenMonitor; `UpstreamUrl` — необязательный внешний
+прокси (пусто = ходить напрямую); локальный домен LiteLLM оставлен в `BypassList`, чтобы
+запросы бюджета и LiteLLM не уходили через внешний прокси.
+
+2. Настройте плагин OpenCode `%USERPROFILE%\.config\opencode\token-monitor-proxy.json`
+(создаётся `install.ps1`, если файла нет):
+
+```json
+{
+  "enabled": true,
+  "proxyUrl": "http://127.0.0.1:8181",
+  "disableDirectFallback": false
+}
+```
+
+`providers` — необязательный список id провайдеров OpenCode, для которых плагин
+подставляет свой `fetch`. Если параметр не задан или пуст, `fetch` подставляется всем
+провайдерам из `opencode.jsonc`. Это нужно для desktop-клиента: Electron/NodeService
+игнорирует `HTTP_PROXY`/`HTTPS_PROXY`, поэтому плагин передаёт провайдеру `fetch`
+с CONNECT-туннелем через `proxyUrl`. В CLI дополнительно работают переменные окружения.
+
+`disableDirectFallback` — если `true`, при ошибке подключения к прокси или TLS-туннелю
+плагин не делает прямое соединение, а завершает запрос ошибкой. По умолчанию `false`:
+при недоступном TokenMonitor запросы идут напрямую, но не учитываются в статистике.
+
+3. Перезапустите TokenMonitor, затем OpenCode.
+
+Схема: `OpenCode → http://127.0.0.1:8181 (TokenMonitor) → напрямую или UpstreamUrl`.
+Если меняете порт/IP, обновите одновременно `ProxySettings.ListenUrl` и `proxyUrl` плагина.
+
+- `enabled: false` — плагин не подменяет `HTTP_PROXY`/`HTTPS_PROXY`;
+- `TOKEN_MONITOR_PROXY_DISABLED=1` — принудительно отключить плагин;
+- `TOKEN_MONITOR_PROXY_URL` — временно переопределить `proxyUrl`;
+- `TOKEN_MONITOR_PROXY_PROVIDERS` — временно переопределить список `providers`;
+- `TOKEN_MONITOR_PROXY_CONFIG` — путь к другому конфигу плагина;
+- диагностика: `%USERPROFILE%\.local\share\opencode\token-proxy.log`.
+
+Плагин направляет запросы провайдеров из `providers` и дополнительно выставляет
+`HTTP_PROXY`/`HTTPS_PROXY` для Bun CLI. Служебные HTTP-клиенты OpenCode он не
+перехватывает: например, `opencode models --refresh` может ходить напрямую.
+`$schema` в `opencode.jsonc` — подсказка редактору, `baseURL` провайдера менять не нужно.
+После старта в логе появляется строка `proxy fetch injected providers=...` — это признак,
+что desktop-запросы будут идти через `proxyUrl`. Если TokenMonitor не запущен и
+`disableDirectFallback` равен `false`, плагин откатывается на прямое соединение, но
+счётчик трафика в этом случае не увеличится. При `disableDirectFallback: true` запрос
+завершится ошибкой.
+
+## Установка плагинов OpenCode
+
+Плагины лежат в проекте:
+
+- `TokenMonitor\OpenCodeSetup\token-stats.ts` — статистика токенов и живая лента;
+- `TokenMonitor\OpenCodeSetup\proxy.ts` — направляет HTTP-трафик opencode через локальный прокси TokenMonitor.
+
+Устанавливаются одной командой:
+
+```powershell
+.\install.ps1              # установить или обновить оба плагина
 .\install.ps1 -Check       # только проверить состояние
-.\install.ps1 -Uninstall -Force  # удалить плагин
+.\install.ps1 -Uninstall -Force  # удалить оба плагина
 ```
 
 Что делает скрипт:
 
-1. Сравнивает SHA-256 файла из `TokenSetup` с установленной копией
-   `%USERPROFILE%\.config\opencode\plugins\token-stats.ts`.
+1. Сравнивает SHA-256 файлов из `TokenMonitor\OpenCodeSetup` с установленными копиями
+   `%USERPROFILE%\.config\opencode\plugins\token-stats.ts` и `proxy.ts`.
 2. Если версии совпадают — ничего не меняет и сообщает «уже установлен».
 3. Если плагин отсутствует — создаёт каталог `plugins` и копирует файл.
-4. Если установлена другая версия — сохраняет резервную копию `token-stats.ts.bak-<дата-время>` и перезаписывает.
-5. После копирования проверяет хэш скопированного файла.
+4. Если установлена другая версия — сохраняет резервную копию `<имя>.bak-<дата-время>` и перезаписывает.
+5. После копирования проверяет хэш каждого скопированного файла.
 
-Коды возврата `-Check`: `0` — установлен и совпадает, `2` — установлен, но другой версии,
-`3` — не установлен. Каталог конфигурации можно переопределить переменной `OPENCODE_CONFIG_DIR`.
+Коды возврата `-Check`: `0` — оба установлены и совпадают, `2` — хотя бы один установлен,
+но отличается по версии, `3` — хотя бы один не установлен. Каталог конфигурации можно
+переопределить переменной `OPENCODE_CONFIG_DIR`.
 
 После установки **перезапустите opencode** — плагины загружаются только при старте.
 Признак работы: после первого запроса появляются
-`%USERPROFILE%\.local\share\opencode\token-stats.log` и `token-events.jsonl`,
+`%USERPROFILE%\.local\share\opencode\token-stats.log`, `token-events.jsonl` и `token-proxy.log`,
 в приложении обновляется живая лента.
 
 ## Требования
@@ -94,12 +196,14 @@ $env:OPENCODE_DATA_DIR = "D:\other\opencode-data"
 (плагин `token-stats.ts` собран под SDK 1.x и с opencode 2.x не работает — `token-events.jsonl`
 может отсутствовать или устареть, на счётчики это не влияет).
 
-## Плагин, который пишет лог
+## Плагин статистики OpenCode
 
-Эталонная копия плагина лежит в проекте: `TokenSetup\token-stats.ts`
-(устанавливается скриптом `install.ps1`, см. раздел «Установка в opencode»).
+`token-stats.ts` читает историю из базы opencode, а «живую ленту» — из своего лога.
+Эталонная копия лежит в проекте: `TokenMonitor\OpenCodeSetup\token-stats.ts`
+(устанавливается скриптом `install.ps1`, см. раздел «Установка плагинов OpenCode»).
 Рабочая копия: `%USERPROFILE%\.config\opencode\plugins\token-stats.ts` —
 opencode подключает её автоматически из каталога `plugins` при старте.
+Прокси-плагин описан в разделе «Прокси для OpenCode».
 
 На событие `session.idle` плагин берёт последнее сообщение пользователя, суммирует все шаги
 ассистента с его `parentID` и пишет:
@@ -145,16 +249,17 @@ opencode подключает её автоматически из катало�
 
 ## Бюджет и настройки
 
-Цифры в верхней полосе берутся из LiteLLM: `GET https://litellm.mydomain.loc/key/info`
-(заголовок `Authorization: Bearer <ключ>`). Ответ содержит `spend`, `max_budget`,
-`budget_reset_at`; при лимите в сутки (`budget_duration: 1d`) остаток обнуляется в 00:00 UTC.
+Цифры в верхней полосе берутся из LiteLLM: `GET <LiteLLMBaseUrl>/key/info`
+(заголовок `Authorization: Bearer <ключ>`). Если в `LiteLLMBaseUrl` указан `/v1`, суффикс
+отбрасывается автоматически. Ответ содержит `spend`, `max_budget`, `budget_reset_at`;
+при лимите в сутки (`budget_duration: 1d`) остаток обнуляется в 00:00 UTC.
 
 Ключ берётся по порядку:
 
 1. поле `LiteLLMApiKey` в конфиге приложения;
-2. переменная окружения `MYDOMAIN_API_KEY`;
-3. поле `"apiKey"` провайдера `mydomain.loc` из `OpenCode.ConfigPath`
-   (по умолчанию `%USERPROFILE%\.config\opencode\opencode.jsonc`).
+2. переменные окружения `MYDOMAIN_API_KEY`, `LITELLM_API_KEY`;
+3. поле `"apiKey"` провайдера из `OpenCode.ConfigPath`, у которого host в `baseURL` совпадает
+   с host из `LiteLLMBaseUrl` (если совпадения нет — первый найденный ключ).
 
 Конфиг приложения (создаётся при первом запуске, открывается ссылкой **конфиг** в верхней полосе):
 
@@ -162,10 +267,18 @@ opencode подключает её автоматически из катало�
 
 ```json
 {
-  "LiteLLMBaseUrl": "https://mydomain.loc",
+  "LiteLLMBaseUrl": "https://litellm.mydomain.loc/v1",
   "LiteLLMApiKey": "",
   "BudgetRefreshSeconds": 60,
   "LastSource": 0,
+  "LocalProxyServerEnabled": false,
+  "ProxySettings": {
+    "Enabled": false,
+    "Url": "",
+    "ListenUrl": "http://127.0.0.1:8181",
+    "UpstreamUrl": "",
+    "BypassList": ["litellm.mydomain.loc"]
+  },
   "OpenCode": {
     "Name": "OpenCode",
     "ConfigPath": "C:\\Users\\<user>\\.config\\opencode\\opencode.jsonc",
@@ -194,6 +307,12 @@ opencode подключает её автоматически из катало�
 - `Cursor.StateDbPath` / `Cursor.EventsPath` — пути Cursor; пусто = значения по умолчанию.
 - `Devin.ApiKey` / `Devin.OrgId` — доступ к Devin API v3.
 - `BudgetRefreshSeconds` — как часто перезапрашивать бюджет (кнопка «Обновить» запрашивает сразу).
+- `LocalProxyServerEnabled` — запускать локальный прокси TokenMonitor.
+- `ProxySettings.ListenUrl` — адрес локального прокси; `UpstreamUrl` — внешний прокси для него
+  (пусто = напрямую).
+- `ProxySettings.Enabled` / `Url` — общий внешний прокси для запросов самого TokenMonitor;
+  `BypassList` — домены, которые не должны идти через него. Добавьте туда локальный домен LiteLLM,
+  чтобы запрос бюджета не уходил через прокси.
 
 Старый плоский `settings.json` (`LitellmBaseUrl`, `ApiKey`, `ConfigOpenCode`, `DevinApiKey` и т.д.) подхватывается при загрузке.
 
@@ -238,6 +357,7 @@ opencode подключает её автоматически из катало�
 | `Models.cs` | модели сессий/запросов/шагов и элементов дерева |
 | `Fmt.cs` | форматирование чисел и длительности |
 | `AppSettings.cs` | конфиг приложения (settings.json) и запрос бюджета в LiteLLM |
-| `install.ps1` | установка/обновление/проверка/удаление плагина в opencode |
-| `TokenSetup\token-stats.ts` | эталонная копия плагина для установки |
+| `install.ps1` | установка/обновление/проверка/удаление плагинов в opencode |
+| `TokenMonitor\OpenCodeSetup\token-stats.ts` | эталонная копия плагина статистики |
+| `TokenMonitor\OpenCodeSetup\proxy.ts` | эталонная копия прокси-плагина |
 | `run.ps1` | сборка при необходимости и запуск |

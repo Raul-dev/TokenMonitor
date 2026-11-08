@@ -11,16 +11,42 @@ function Write-Ok { param($text) Write-Host $text -ForegroundColor Green }
 function Write-Warn { param($text) Write-Host $text -ForegroundColor Yellow }
 function Write-Err { param($text) Write-Host $text -ForegroundColor Red }
 
-$source = Join-Path $PSScriptRoot 'TokenMonitor\OpenCodeSetup\token-stats.ts'
 $configRoot = if ($env:OPENCODE_CONFIG_DIR) { $env:OPENCODE_CONFIG_DIR } else { Join-Path $env:USERPROFILE '.config\opencode' }
 $pluginsDir = Join-Path $configRoot 'plugins'
-$target = Join-Path $pluginsDir 'token-stats.ts'
+$proxyConfig = Join-Path $configRoot 'token-monitor-proxy.json'
 $dataDir = Join-Path $env:USERPROFILE '.local\share\opencode'
 
+$plugins = @(
+    [pscustomobject]@{
+        Name = 'token-stats'
+        Title = 'статистика токенов'
+        Source = Join-Path $PSScriptRoot 'TokenMonitor\OpenCodeSetup\token-stats.ts'
+        Target = Join-Path $pluginsDir 'token-stats.ts'
+        SourceHash = $null
+        Installed = $false
+        TargetHash = $null
+        UpToDate = $false
+    },
+    [pscustomobject]@{
+        Name = 'proxy'
+        Title = 'локальный прокси'
+        Source = Join-Path $PSScriptRoot 'TokenMonitor\OpenCodeSetup\proxy.ts'
+        Target = Join-Path $pluginsDir 'proxy.ts'
+        SourceHash = $null
+        Installed = $false
+        TargetHash = $null
+        UpToDate = $false
+    }
+)
+
 Write-Host ''
-Write-Host 'Token Monitor — плагин статистики токенов' -ForegroundColor Cyan
-Write-Host "  источник: $source"
-Write-Host "  цель:     $target"
+Write-Host 'Token Monitor — плагины opencode' -ForegroundColor Cyan
+foreach ($plugin in $plugins) {
+    Write-Host "  $($plugin.Name) ($($plugin.Title))"
+    Write-Host "    источник: $($plugin.Source)"
+    Write-Host "    цель:     $($plugin.Target)"
+}
+Write-Host "  конфиг прокси: $proxyConfig"
 Write-Host ''
 
 if ($Check -and $Uninstall) {
@@ -28,52 +54,90 @@ if ($Check -and $Uninstall) {
     exit 1
 }
 
-if (-not (Test-Path -LiteralPath $source)) {
-    Write-Err "Не найден файл плагина: $source"
+$missingSources = @($plugins | Where-Object { -not (Test-Path -LiteralPath $_.Source) })
+if ($missingSources.Count -gt 0) {
+    foreach ($plugin in $missingSources) {
+        Write-Err "Не найден файл плагина: $($plugin.Source)"
+    }
     exit 1
 }
 
-$sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
-$installed = Test-Path -LiteralPath $target
-$targetHash = if ($installed) { (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash } else { $null }
-$upToDate = $installed -and ($targetHash -eq $sourceHash)
+foreach ($plugin in $plugins) {
+    $plugin.SourceHash = (Get-FileHash -LiteralPath $plugin.Source -Algorithm SHA256).Hash
+    $plugin.Installed = Test-Path -LiteralPath $plugin.Target
+    $plugin.TargetHash = if ($plugin.Installed) { (Get-FileHash -LiteralPath $plugin.Target -Algorithm SHA256).Hash } else { $null }
+    $plugin.UpToDate = $plugin.Installed -and ($plugin.TargetHash -eq $plugin.SourceHash)
+}
 
 function Show-DataFiles {
-    Write-Host 'Файлы, которые создаёт плагин:'
+    Write-Host 'Файлы, которые создают плагины:'
     Write-Host "  $dataDir\token-stats.log"
     Write-Host "  $dataDir\token-events.jsonl"
+    Write-Host "  $dataDir\token-proxy.log"
 }
 
 function Show-NextSteps {
     Write-Host ''
     Write-Host 'Что дальше:' -ForegroundColor Cyan
     Write-Host '  1. Перезапустите opencode — плагины загружаются только при старте.'
-    Write-Host '  2. Выполните любой запрос: появятся файлы логов (см. ниже).'
-    Write-Host '  3. Запустите приложение: .\run.ps1'
+    Write-Host '  2. Убедитесь, что TokenMonitor запущен и локальный прокси слушает адрес из proxyUrl.'
+    Write-Host '  3. Выполните любой запрос: появятся файлы логов (см. ниже).'
+    Write-Host '  4. Запустите приложение: .\run.ps1'
+    Write-Host ''
+    Write-Host 'Настройка прокси-плагина:'
+    Write-Host "  файл: $proxyConfig"
+    Write-Host '  поля: enabled (true/false), proxyUrl ("http://IP:PORT"), disableDirectFallback (true/false)'
+    Write-Host '  TOKEN_MONITOR_PROXY_URL        — переопределить proxyUrl'
+    Write-Host '  TOKEN_MONITOR_PROXY_DISABLED=1 — принудительно отключить'
     Show-DataFiles
 }
 
+function Ensure-ProxyConfig {
+    if (Test-Path -LiteralPath $proxyConfig) {
+        return
+    }
+
+    $defaultProxyConfig = @{
+        enabled = $true
+        proxyUrl = 'http://127.0.0.1:8181'
+        disableDirectFallback = $false
+    } | ConvertTo-Json
+    [IO.File]::WriteAllText($proxyConfig, $defaultProxyConfig + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Ok "Создан конфиг прокси-плагина: $proxyConfig"
+}
+
 if ($Check) {
-    if (-not $installed) {
-        Write-Warn 'Плагин не установлен.'
+    $missing = @($plugins | Where-Object { -not $_.Installed })
+    $outdated = @($plugins | Where-Object { $_.Installed -and -not $_.UpToDate })
+
+    foreach ($plugin in $plugins) {
+        if ($plugin.UpToDate) {
+            Write-Ok "$($plugin.Name): установлен, версия совпадает с проектом."
+        } elseif ($plugin.Installed) {
+            Write-Warn "$($plugin.Name): установлен, но отличается от версии в проекте (нужно обновить)."
+            Write-Host "  в проекте: $($plugin.SourceHash)"
+            Write-Host "  на диске:  $($plugin.TargetHash)"
+        } else {
+            Write-Warn "$($plugin.Name): не установлен."
+        }
+    }
+
+    if ($missing.Count -gt 0) {
         Show-DataFiles
         exit 3
     }
 
-    if ($upToDate) {
-        Write-Ok 'Плагин установлен, версия совпадает с проектом.'
-        exit 0
+    if ($outdated.Count -gt 0) {
+        exit 2
     }
 
-    Write-Warn 'Плагин установлен, но отличается от версии в проекте (нужно обновить).'
-    Write-Host "  в проекте: $sourceHash"
-    Write-Host "  на диске:  $targetHash"
-    exit 2
+    exit 0
 }
 
 if ($Uninstall) {
-    if (-not $installed) {
-        Write-Warn 'Плагин не установлен — удалять нечего.'
+    $installedPlugins = @($plugins | Where-Object { $_.Installed })
+    if ($installedPlugins.Count -eq 0) {
+        Write-Warn 'Плагины не установлены — удалять нечего.'
         exit 0
     }
 
@@ -82,14 +146,22 @@ if ($Uninstall) {
         exit 1
     }
 
-    Remove-Item -LiteralPath $target -Force
-    Write-Ok "Удалён: $target"
-    Write-Warn 'Не забудьте перезапустить opencode, чтобы плагин перестал загружаться.'
+    foreach ($plugin in $installedPlugins) {
+        Remove-Item -LiteralPath $plugin.Target -Force
+        Write-Ok "Удалён: $($plugin.Target)"
+    }
+
+    Write-Warn 'Не забудьте перезапустить opencode, чтобы плагины перестали загружаться.'
     exit 0
 }
 
-if ($upToDate) {
-    Write-Ok 'Плагин уже установлен, версия совпадает — изменений не требуется.'
+if (Test-Path -LiteralPath $configRoot) {
+    Ensure-ProxyConfig
+}
+
+$pending = @($plugins | Where-Object { -not $_.UpToDate })
+if ($pending.Count -eq 0) {
+    Write-Ok 'Оба плагина уже установлены, версии совпадают — изменений не требуется.'
     Show-DataFiles
     exit 0
 }
@@ -108,21 +180,26 @@ if (-not (Test-Path -LiteralPath $dbPath)) {
 }
 
 New-Item -ItemType Directory -Path $pluginsDir -Force | Out-Null
+Ensure-ProxyConfig
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
-if ($installed) {
-    $backup = $target + '.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
-    Copy-Item -LiteralPath $target -Destination $backup -Force
-    Write-Warn "Прежняя версия сохранена: $backup"
+foreach ($plugin in $pending) {
+    if ($plugin.Installed) {
+        $backup = $plugin.Target + '.bak-' + $stamp
+        Copy-Item -LiteralPath $plugin.Target -Destination $backup -Force
+        Write-Warn "Прежняя версия $($plugin.Name) сохранена: $backup"
+    }
+
+    Copy-Item -LiteralPath $plugin.Source -Destination $plugin.Target -Force
+
+    $newHash = (Get-FileHash -LiteralPath $plugin.Target -Algorithm SHA256).Hash
+    if ($newHash -ne $plugin.SourceHash) {
+        Write-Err "Установка $($plugin.Name) не удалась: хэш скопированного файла не совпадает с исходным."
+        exit 1
+    }
+
+    Write-Ok "Установлено: $($plugin.Target)"
 }
 
-Copy-Item -LiteralPath $source -Destination $target -Force
-
-$newHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
-if ($newHash -ne $sourceHash) {
-    Write-Err 'Установка не удалась: хэш скопированного файла не совпадает с исходным.'
-    exit 1
-}
-
-Write-Ok "Установлено: $target"
 Show-NextSteps
 exit 0

@@ -101,8 +101,8 @@ public partial class App : Application
         builder.AppendLine($"live:     {snapshot.EventsPath} ({snapshot.Live.Count} events)");
         builder.AppendLine($"sessions: {sessions.Count} · requests: {requests.Count} · steps: {steps.Count}");
         builder.AppendLine();
-        builder.AppendLine($"month    total={month.Total} ({Fmt.Tokens(month.Total)}) in={month.Input} out={month.Output} reasoning={month.Reasoning} cache={month.Cached}");
-        builder.AppendLine($"day      total={day.Total} ({Fmt.Tokens(day.Total)}) in={day.Input} out={day.Output} reasoning={day.Reasoning} cache={day.Cached}");
+        builder.AppendLine($"month    total={month.Total} ({Fmt.Tokens(month.Total)}) in={month.Input} out={month.Output} reasoning={month.Reasoning} cache={month.Cached} cacheRead={month.CacheRead} cacheWrite={month.CacheWrite} hit={month.CacheHitText}");
+        builder.AppendLine($"day      total={day.Total} ({Fmt.Tokens(day.Total)}) in={day.Input} out={day.Output} reasoning={day.Reasoning} cache={day.Cached} cacheRead={day.CacheRead} cacheWrite={day.CacheWrite} hit={day.CacheHitText}");
         builder.AppendLine($"all time total={steps.Sum(s => s.Tokens.Total)} ({Fmt.Tokens(steps.Sum(s => s.Tokens.Total))})");
         builder.AppendLine(budget.Spend is { } spend
             ? $"budget   ${spend:0.00}" + (budget.MaxBudget is { } max ? $" / ${max:0.00} · осталось ${budget.Remaining:0.00}" : string.Empty) + (budget.ResetAt is { } reset ? $" · сброс {reset:dd.MM HH:mm}" : string.Empty)

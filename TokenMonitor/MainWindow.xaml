@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:TokenMonitor"
         Title="Token Monitor — расход токенов"
+        Icon="Assets/TokenMonitor.ico"
         Height="820" Width="1240" MinHeight="560" MinWidth="980"
         Background="#F5F6F8" FontFamily="Segoe UI" FontSize="12"
         TextOptions.TextFormattingMode="Display"
@@ -68,20 +69,24 @@
 
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock Text="Token Monitor" FontSize="17" FontWeight="SemiBold" Foreground="#111827" />
-                    <Border Background="#F3F4F6" CornerRadius="8" Padding="2" Margin="0,6,0,4" HorizontalAlignment="Left">
-                        <ComboBox x:Name="SourceComboBox" Width="120" Height="28" Style="{StaticResource SourceComboBox}"
-                                  ItemsSource="{Binding Providers}"
-                                  DisplayMemberPath="Key"
-                                  SelectedValuePath="Value"
-                                  SelectionChanged="SourceComboBox_SelectionChanged">
-                            <ComboBox.ItemContainerStyle>
-                                <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
-                                    <!-- Магия здесь: берём IsEnabled из структуры ProviderConfig (Value) -->
-                                    <Setter Property="IsEnabled" Value="{Binding Value.IsEnabled}"/>
-                                </Style>
-                            </ComboBox.ItemContainerStyle>
-                        </ComboBox>
-                    </Border>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,6,0,4">
+                        <Border Background="#F3F4F6" CornerRadius="8" Padding="2">
+                            <ComboBox x:Name="SourceComboBox" Width="120" Height="28" Style="{StaticResource SourceComboBox}"
+                                      ItemsSource="{Binding Providers}"
+                                      DisplayMemberPath="Key"
+                                      SelectedValuePath="Value"
+                                      SelectionChanged="SourceComboBox_SelectionChanged">
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                        <!-- Магия здесь: берём IsEnabled из структуры ProviderConfig (Value) -->
+                                        <Setter Property="IsEnabled" Value="{Binding Value.IsEnabled}"/>
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
+                        </Border>
+                        <TextBlock x:Name="ProxyTrafficText" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   FontSize="10" Foreground="#6B7280" Visibility="Collapsed" Text="" />
+                    </StackPanel>
                     <TextBlock x:Name="DbPathText" FontSize="10" Foreground="#8A8F98" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
 
@@ -140,6 +145,34 @@
             </Border>
         </UniformGrid>
 
+        <Border x:Name="AlertsPanel" DockPanel.Dock="Top" Background="#FFFBEB" BorderBrush="#FCD34D"
+                BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="16,0,16,8"
+                Visibility="Collapsed">
+            <StackPanel>
+                <TextBlock x:Name="AlertsTitle" Text="АЛЕРТЫ" FontSize="10" FontWeight="SemiBold" Foreground="#92400E" Margin="0,0,0,3" />
+                <ItemsControl x:Name="AlertsList">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Text}" ToolTip="{Binding Detail}"
+                                       TextWrapping="Wrap" Margin="0,1">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#B45309" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Critical}" Value="True">
+                                                <Setter Property="Foreground" Value="#B91C1C" />
+                                                <Setter Property="FontWeight" Value="SemiBold" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
         <Grid Margin="16,0,16,14">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -157,6 +190,7 @@
                                 <ColumnDefinition Width="70" />
                                 <ColumnDefinition Width="65" />
                                 <ColumnDefinition Width="75" />
+                                <ColumnDefinition Width="65" />
                                 <ColumnDefinition Width="70" />
                                 <ColumnDefinition Width="60" />
                                 <ColumnDefinition Width="80" />
@@ -166,9 +200,10 @@
                             <TextBlock Grid.Column="2" Text="ВХОД" Style="{StaticResource HeaderCell}" />
                             <TextBlock Grid.Column="3" Text="ВЫХОД" Style="{StaticResource HeaderCell}" />
                             <TextBlock Grid.Column="4" Text="REASONING" Style="{StaticResource HeaderCell}" />
-                            <TextBlock Grid.Column="5" Text="КЭШ" Style="{StaticResource HeaderCell}" />
-                            <TextBlock Grid.Column="6" Text="ЗАПР/ШАГИ" Style="{StaticResource HeaderCell}" />
-                            <TextBlock Grid.Column="7" Text="ВРЕМЯ" Style="{StaticResource HeaderCell}" />
+                            <TextBlock Grid.Column="5" Text="КЭШ %" Style="{StaticResource HeaderCell}" />
+                            <TextBlock Grid.Column="6" Text="CACHE W" Style="{StaticResource HeaderCell}" />
+                            <TextBlock Grid.Column="7" Text="ЗАПР/ШАГИ" Style="{StaticResource HeaderCell}" />
+                            <TextBlock Grid.Column="8" Text="ВРЕМЯ" Style="{StaticResource HeaderCell}" />
                         </Grid>
                     </Border>
                     <TextBlock DockPanel.Dock="Bottom" x:Name="TreeHint" Text="Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode."
@@ -184,9 +219,6 @@
                               PreviewMouseRightButtonDown="SessionsTree_PreviewMouseRightButtonDown">
                         <TreeView.ContextMenu>
                             <ContextMenu x:Name="SessionMenu" Opened="SessionMenu_Opened">
-                                <MenuItem x:Name="OpenInAppItem" Header="Открыть в Windows OpenCode" Click="OpenInApp_Click"
-                                          ToolTip="Поднимает окно OpenCode на этом проекте (сессию выбирает само приложение)" />
-                                <Separator />
                                 <MenuItem x:Name="ResumeTuiItem" Header="Открыть в терминале (эта сессия)" Click="ResumeTui_Click"
                                           ToolTip="Запускает opencode -s &lt;id&gt; в новом окне терминала" />
                                 <MenuItem x:Name="ResumeForkItem" Header="Открыть в терминале копией (--fork)" Click="ResumeFork_Click"
@@ -212,6 +244,7 @@
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="65" />
                                         <ColumnDefinition Width="75" />
+                                        <ColumnDefinition Width="65" />
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="60" />
                                         <ColumnDefinition Width="80" />
@@ -224,9 +257,10 @@
                                     <TextBlock Grid.Column="2" Text="{Binding InputText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
                                     <TextBlock Grid.Column="3" Text="{Binding OutputText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
                                     <TextBlock Grid.Column="4" Text="{Binding ReasoningText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
-                                    <TextBlock Grid.Column="5" Text="{Binding CacheText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
-                                    <TextBlock Grid.Column="6" Text="{Binding CountText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
-                                    <TextBlock Grid.Column="7" Text="{Binding TimeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#6B7280" />
+                                    <TextBlock Grid.Column="5" Text="{Binding CacheHitText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
+                                    <TextBlock Grid.Column="6" Text="{Binding CacheWriteText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
+                                    <TextBlock Grid.Column="7" Text="{Binding CountText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
+                                    <TextBlock Grid.Column="8" Text="{Binding TimeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#6B7280" />
                                 </Grid>
                             </HierarchicalDataTemplate>
 
@@ -238,6 +272,7 @@
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="65" />
                                         <ColumnDefinition Width="75" />
+                                        <ColumnDefinition Width="65" />
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="60" />
                                         <ColumnDefinition Width="80" />
@@ -250,9 +285,10 @@
                                     <TextBlock Grid.Column="2" Text="{Binding InputText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
                                     <TextBlock Grid.Column="3" Text="{Binding OutputText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
                                     <TextBlock Grid.Column="4" Text="{Binding ReasoningText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
-                                    <TextBlock Grid.Column="5" Text="{Binding CacheText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
-                                    <TextBlock Grid.Column="6" Text="{Binding CountText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
-                                    <TextBlock Grid.Column="7" Text="{Binding TimeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#6B7280" />
+                                    <TextBlock Grid.Column="5" Text="{Binding CacheHitText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
+                                    <TextBlock Grid.Column="6" Text="{Binding CacheWriteText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
+                                    <TextBlock Grid.Column="7" Text="{Binding CountText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#4B5563" />
+                                    <TextBlock Grid.Column="8" Text="{Binding TimeText}" HorizontalAlignment="Right" Margin="0,0,8,0" Foreground="#6B7280" />
                                 </Grid>
                             </HierarchicalDataTemplate>
 
@@ -264,6 +300,7 @@
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="65" />
                                         <ColumnDefinition Width="75" />
+                                        <ColumnDefinition Width="65" />
                                         <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="60" />
                                         <ColumnDefinition Width="80" />
@@ -273,9 +310,10 @@
                                     <TextBlock Grid.Column="2" Text="{Binding InputText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
                                     <TextBlock Grid.Column="3" Text="{Binding OutputText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
                                     <TextBlock Grid.Column="4" Text="{Binding ReasoningText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
-                                    <TextBlock Grid.Column="5" Text="{Binding CacheText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
-                                    <TextBlock Grid.Column="6" Text="{Binding CountText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
-                                    <TextBlock Grid.Column="7" Text="{Binding TimeText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
+                                    <TextBlock Grid.Column="5" Text="{Binding CacheHitText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
+                                    <TextBlock Grid.Column="6" Text="{Binding CacheWriteText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
+                                    <TextBlock Grid.Column="7" Text="{Binding CountText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
+                                    <TextBlock Grid.Column="8" Text="{Binding TimeText}" FontSize="11" Foreground="#8A8F98" HorizontalAlignment="Right" Margin="0,0,8,0" />
                                 </Grid>
                             </DataTemplate>
                         </TreeView.Resources>
