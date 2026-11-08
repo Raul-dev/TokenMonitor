@@ -104,9 +104,7 @@ public partial class App : Application
         builder.AppendLine($"month    total={month.Total} ({Fmt.Tokens(month.Total)}) in={month.Input} out={month.Output} reasoning={month.Reasoning} cache={month.Cached} cacheRead={month.CacheRead} cacheWrite={month.CacheWrite} hit={month.CacheHitText}");
         builder.AppendLine($"day      total={day.Total} ({Fmt.Tokens(day.Total)}) in={day.Input} out={day.Output} reasoning={day.Reasoning} cache={day.Cached} cacheRead={day.CacheRead} cacheWrite={day.CacheWrite} hit={day.CacheHitText}");
         builder.AppendLine($"all time total={steps.Sum(s => s.Tokens.Total)} ({Fmt.Tokens(steps.Sum(s => s.Tokens.Total))})");
-        builder.AppendLine(budget.Spend is { } spend
-            ? $"budget   ${spend:0.00}" + (budget.MaxBudget is { } max ? $" / ${max:0.00} · осталось ${budget.Remaining:0.00}" : string.Empty) + (budget.ResetAt is { } reset ? $" · сброс {reset:dd.MM HH:mm}" : string.Empty)
-            : $"budget   n/a ({budget.Error})");
+        builder.AppendLine(FormatBudget(budget));
         builder.AppendLine();
 
         builder.AppendLine("top sessions by tokens:");
@@ -130,6 +128,39 @@ public partial class App : Application
         }
 
         return builder.ToString();
+    }
+
+    static string FormatBudget(BudgetInfo budget)
+    {
+        var parts = new List<string>();
+
+        if (budget.Display == BudgetDisplay.Percent)
+        {
+            parts.Add($"{(budget.Percent ?? 0):0.0}%");
+            if (budget.Plan is { } plan && !string.IsNullOrWhiteSpace(plan)) parts.Add(plan);
+            if (budget.ResetAt is { } reset) parts.Add($"сброс {reset:dd.MM HH:mm}");
+        }
+        else if (budget.Spend is { } spend)
+        {
+            parts.Add($"${spend:0.00}" + (budget.MaxBudget is { } max ? $" / ${max:0.00} · осталось ${budget.Remaining:0.00}" : string.Empty));
+            if (budget.ResetAt is { } reset) parts.Add($"сброс {reset:dd.MM HH:mm}");
+            if (budget.Plan is { } plan && !string.IsNullOrWhiteSpace(plan)) parts.Add(plan);
+        }
+        else
+        {
+            parts.Add($"n/a ({budget.Error})");
+        }
+
+        if (budget.Alias is { } alias) parts.Add(alias);
+        if (budget.Meters.Count > 0)
+        {
+            parts.Add(string.Join(", ", budget.Meters.Select(meter =>
+                $"{meter.Title} {meter.Percent:0.0}%" + (meter.Limited ? " (лимит)" : string.Empty))));
+        }
+
+        var text = "budget   " + string.Join(" · ", parts);
+        if (budget.SourceUrl is { } source) text += $"\n         источник: {source}";
+        return text;
     }
 
     static string Trim(string text, int max) => text.Length <= max ? text : text[..max];

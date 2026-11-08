@@ -29,6 +29,10 @@ WPF-приложение для контроля расхода токенов o
 Ключ обычно подхватывается из конфига OpenCode; при необходимости задайте `LiteLLMApiKey`,
 `MYDOMAIN_API_KEY` или `LITELLM_API_KEY`.
 
+Если в OpenCode подключён OpenCode Go (ключ `oc_sk_...`) или аккаунт OpenCode Console,
+бюджет подхватится автоматически (режим `Auto`), а LiteLLM останется запасным источником.
+Подробнее — в разделе [«Бюджет и настройки»](#бюджет-и-настройки).
+
 4. Установите плагины OpenCode (OpenCode должен хотя бы раз запускаться) и перезапустите его:
 
 ```powershell
@@ -244,10 +248,19 @@ opencode подключает её автоматически из катало�
 - **За запрос** — выбранный запрос; запрос = сообщение пользователя + все шаги ассистента с его `parentID`.
 - **Токены** = `input + output + reasoning + cacheRead + cacheWrite`; в колонках показаны те же категории
   (`Вход`, `Выход`, `Reasoning`, `Кэш`). Полные значения — в подсказке при наведении на строку.
-- **Бюджет** (в центре верхней полосы) — расход и лимит в долларах из LiteLLM:
-  `$47.76 / $60.00`, ниже — остаток и время сброса лимита (UTC+3).
+- **Бюджет** (в центре верхней полосы) — расход и лимит из LiteLLM (`$47.76 / $60.00`)
+  или из аккаунта OpenCode (проценты лимитов OpenCode Go и бюджеты OpenCode Console);
+  ниже — остаток и время сброса лимита (UTC+3).
 
 ## Бюджет и настройки
+
+Источник бюджета задаётся полем `BudgetSource`:
+
+- `0` (`Auto`, по умолчанию) — сначала внешний API провайдера (сейчас OpenCode), при ошибке — LiteLLM;
+- `1` (`LiteLLM`) — только LiteLLM;
+- `2` (`ExternalAPI`) — только внешний API провайдера (сейчас OpenCode).
+
+### LiteLLM
 
 Цифры в верхней полосе берутся из LiteLLM: `GET <LiteLLMBaseUrl>/key/info`
 (заголовок `Authorization: Bearer <ключ>`). Если в `LiteLLMBaseUrl` указан `/v1`, суффикс
@@ -261,6 +274,45 @@ opencode подключает её автоматически из катало�
 3. поле `"apiKey"` провайдера из `OpenCode.ConfigPath`, у которого host в `baseURL` совпадает
    с host из `LiteLLMBaseUrl` (если совпадения нет — первый найденный ключ).
 
+### Внешний API провайдера (OpenCode)
+
+`ExternalAPI` — общий режим для запроса бюджета напрямую у API AI-провайдера. Сейчас реализован
+OpenCode; для других провайдеров добавляется свой формат ответа и свой маппинг в верхнюю полосу.
+
+Есть два независимых вида входа, и TokenMonitor использует оба:
+
+1. **Ключ OpenCode Go** (подписка на модели). Хранится не в `account.json`, а в базе
+   `%USERPROFILE%\.local\share\opencode\opencode.db`, таблица `credential`
+   (`integration_id = 'opencode-go'`, поле `value` — JSON с `key`; активная запись `active = 1`).
+   Проверить можно командой `opencode auth list` — там будет строка `OpenCode Go`.
+   TokenMonitor читает ключ из базы и запрашивает
+   `GET https://opencode.ai/zen/go/v1/usage` с `Authorization: Bearer <key>`.
+   Ответ содержит проценты `rolling` (5 часов), `weekly` (неделя), `monthly` (месяц) —
+   этого достаточно, чтобы показывать бюджет, даже если OpenCode Console не подключён.
+2. **Аккаунт OpenCode Console** (организация и денежные бюджеты). Основной путь — локальная
+   служба OpenCode: TokenMonitor читает `%USERPROFILE%\.local\state\opencode\service.json`
+   (или `%XDG_STATE_HOME%\opencode\service.json`), берёт `url` и `password` и запрашивает
+   `GET <url>/api/experimental/usage/limits` с Basic-авторизацией `opencode:<password>`.
+   Ответ содержит те же лимиты Go (`rolling`, `weekly`, `monthly`) и бюджеты Console
+   (`budgets`) в долларах. Если служба не запущена, используется прямой запрос по данным
+   `account.json` / `auth.json` (`access`, `metadata.orgID`, `metadata.server`):
+   `GET https://opencode.ai/zen/go/v1/usage` (заголовок `x-opencode-org-id`)
+   и `GET https://opencode.ai/console/api/policies/current-budgets` (`x-org-id`).
+
+Порядок опроса: локальная служба → прямой аккаунт Console → ключ OpenCode Go из базы.
+Если `usage/limits` возвращает `data: null`, это значит, что Console-аккаунт не подключён;
+TokenMonitor в этом случае не сдаётся, а берёт лимиты по ключу OpenCode Go.
+
+Если есть бюджеты Console, в верхней полосе показываются доллары (самый близкий к исчерпанию
+бюджет); иначе — процент месячного лимита OpenCode Go. Проценты всех трёх окон и время сброса
+видны в подсказке.
+
+TokenMonitor не обновляет OAuth-токен: если он истёк, в верхней полосе будет
+`токен OpenCode истёк: запустите OpenCode, чтобы обновить вход`. Запустите OpenCode
+(или войдите заново) и нажмите «Обновить». Файлы OpenCode читаются только на чтение.
+Для ручного переопределения используйте `OpenCode.ApiKey` в секции провайдера
+(можно вписать и ключ `oc_sk_...`) и `OpenCode.OrgId`.
+
 Конфиг приложения (создаётся при первом запуске, открывается ссылкой **конфиг** в верхней полосе):
 
 `%APPDATA%\TokenMonitor\settings.json`
@@ -269,6 +321,7 @@ opencode подключает её автоматически из катало�
 {
   "LiteLLMBaseUrl": "https://litellm.mydomain.loc/v1",
   "LiteLLMApiKey": "",
+  "BudgetSource": 0,
   "BudgetRefreshSeconds": 60,
   "LastSource": 0,
   "LocalProxyServerEnabled": false,
@@ -282,7 +335,9 @@ opencode подключает её автоматически из катало�
   "OpenCode": {
     "Name": "OpenCode",
     "ConfigPath": "C:\\Users\\<user>\\.config\\opencode\\opencode.jsonc",
-    "IsEnabled": true
+    "IsEnabled": true,
+    "ApiKey": "",
+    "OrgId": ""
   },
   "Cursor": {
     "Name": "Cursor",
@@ -303,6 +358,10 @@ opencode подключает её автоматически из катало�
 
 - `LiteLLMBaseUrl` — адрес LiteLLM (можно заменить на другой инстанс).
 - `LiteLLMApiKey` — пусто = брать из конфига OpenCode (обычный случай); можно вписать отдельный ключ.
+- `BudgetSource` — `0` Auto, `1` LiteLLM, `2` ExternalAPI (см. выше).
+- `OpenCode.ApiKey` / `OpenCode.OrgId` — необязательные переопределения: ключ OpenCode Go
+  (`oc_sk_...`) или токен Console и организация; пусто = читать из базы `opencode.db`
+  и `account.json` / `auth.json`.
 - `OpenCode.ConfigPath` — откуда читать ключ, если `LiteLLMApiKey` пуст.
 - `Cursor.StateDbPath` / `Cursor.EventsPath` — пути Cursor; пусто = значения по умолчанию.
 - `Devin.ApiKey` / `Devin.OrgId` — доступ к Devin API v3.
@@ -314,9 +373,11 @@ opencode подключает её автоматически из катало�
   `BypassList` — домены, которые не должны идти через него. Добавьте туда локальный домен LiteLLM,
   чтобы запрос бюджета не уходил через прокси.
 
-Старый плоский `settings.json` (`LitellmBaseUrl`, `ApiKey`, `ConfigOpenCode`, `DevinApiKey` и т.д.) подхватывается при загрузке.
+Старый плоский `settings.json` (`LitellmBaseUrl`, `ApiKey`, `ConfigOpenCode`, `DevinApiKey` и т.д.) подхватывается при загрузке; `OpenCodeApiKey` / `OpenCodeOrgId` переносятся в `OpenCode.ApiKey` / `OpenCode.OrgId`.
 
-Если LiteLLM недоступен, в верхней полосе будет `—` с причиной, остальные показатели работают.
+Если источник бюджета недоступен (LiteLLM или внешний API провайдера), в верхней полосе будет `—` с причиной,
+остальные показатели работают. В режиме `Auto` ошибка внешнего API не мешает: TokenMonitor сразу
+пробует LiteLLM и показывает его данные.
 
 ## Открытие сессии в opencode
 
@@ -342,7 +403,8 @@ opencode подключает её автоматически из катало�
 
 ## Ограничения
 
-- `cost` в базе opencode равен 0: расход в долларах ведёт LiteLLM, поэтому бюджет берётся из его API.
+- `cost` в базе opencode равен 0: расход в долларах ведёт LiteLLM или OpenCode Console,
+  поэтому бюджет берётся из их API.
 - `cache.read` / `cache.write` тоже приходят нулевыми — провайдер не сообщает метаданные кэша;
   приложение корректно покажет их, если они появятся.
 - Шаги, у которых нет токенов (например, служебные сообщения), попадают в дерево с нулями.
@@ -356,7 +418,9 @@ opencode подключает её автоматически из катало�
 | `DataStore.cs` | чтение `opencode.db` и логов, парсинг JSONL/лога |
 | `Models.cs` | модели сессий/запросов/шагов и элементов дерева |
 | `Fmt.cs` | форматирование чисел и длительности |
-| `AppSettings.cs` | конфиг приложения (settings.json) и запрос бюджета в LiteLLM |
+| `AppSettings.cs` | конфиг приложения (settings.json) |
+| `BudgetService.cs` | выбор источника бюджета, LiteLLM `/key/info` |
+| `OpenCodeBudgetProvider.cs` | бюджет OpenCode Go/Console (служба, SQLite-ключ, прямой API) |
 | `install.ps1` | установка/обновление/проверка/удаление плагинов в opencode |
 | `TokenMonitor\OpenCodeSetup\token-stats.ts` | эталонная копия плагина статистики |
 | `TokenMonitor\OpenCodeSetup\proxy.ts` | эталонная копия прокси-плагина |
