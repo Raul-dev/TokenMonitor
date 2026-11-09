@@ -16,11 +16,25 @@ namespace TokenMonitor
 
         public static async Task InitializeAsync()
         {
+
+            // 1. Настраиваем хендлер: отключаем прокси (чтобы исключить системные сбои) 
+            // и принудительно выставляем IPv4, если виртуальный адаптер чудит
+            var handler = new HttpClientHandler
+            {
+                UseProxy = false,
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+            };
+
+            using var geoClient = new HttpClient(handler);
+            geoClient.Timeout = TimeSpan.FromSeconds(5);
+
+            // 2. Ставим стандартный User-Agent обычного браузера (Chrome)
+            geoClient.DefaultRequestHeaders.Clear();
+            geoClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            geoClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/json");
+
             try
             {
-                using var geoClient = new HttpClient();
-                geoClient.Timeout = TimeSpan.FromSeconds(5);
-                geoClient.DefaultRequestHeaders.Add("User-Agent", "TokenMonitor/1.0");
 
                 var countryCode = (await geoClient.GetStringAsync("https://ipinfo.io/country")).Trim();
 

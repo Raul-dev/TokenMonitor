@@ -1,20 +1,24 @@
 ﻿using CommandLine;
 using Microsoft.Extensions.Configuration;
 using Serilog;
+using Serilog.Events;
 using System;
 using TokenMonitor.Proxy;
 
 #if DEBUG
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
-    .WriteTo.Console()
-    .CreateLogger();
+const LogEventLevel minimumLevel = LogEventLevel.Debug;
 #else
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
+const LogEventLevel minimumLevel = LogEventLevel.Information;
+#endif
+
+Log.Logger = Logging.CreateLoggerConfiguration("tokenmonitor-proxy", minimumLevel)
     .WriteTo.Console()
     .CreateLogger();
-#endif
+
+AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+    Log.Fatal(e.ExceptionObject as Exception, "Необработанное исключение");
+
+Log.Information("Каталог логов: {LogDirectory}", Logging.LogDirectory);
 
 // === ПАРСИНГ АРГУМЕНТОВ КОМАНДНОЙ СТРОКИ ===
 var cmdParser = new Parser(with => with.IgnoreUnknownArguments = true);
@@ -85,8 +89,15 @@ string DescribeProxySource()
     return "конфигурация (источник не определён)";
 }
 
-var server = new ProxyServer(listenUrl, upstreamProxy);
-await server.RunAsync();
+try
+{
+    var server = new ProxyServer(listenUrl, upstreamProxy);
+    await server.RunAsync();
+}
+finally
+{
+    await Log.CloseAndFlushAsync();
+}
 
 public class ProxyCommandLineOptions
 {

@@ -1,5 +1,6 @@
-﻿using System.IO;
-using System.Diagnostics;
+﻿using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -49,7 +50,17 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        settings = SettingsStore.Load();
+        try
+        {
+            settings = SettingsStore.Load();
+        }
+        catch (JsonException error)
+        {
+            StatusText.Text =  $"Ошибка Settings: Строка: {error.LineNumber}, Позиция: {error.BytePositionInLine}";
+        }
+        if (settings == null)
+            return;
+
         currentSource = settings.LastSource;
         budgetService = new BudgetService(settings);
         cursorStore = new CursorStore(settings);

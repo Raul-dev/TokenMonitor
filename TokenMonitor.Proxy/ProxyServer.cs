@@ -132,7 +132,7 @@ namespace TokenMonitor.Proxy
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Log.Error("[Proxy] Ошибка accept: {Message}", ex.Message);
+                Log.Error(ex, "[Proxy] Ошибка accept");
             }
             finally
             {
@@ -299,14 +299,19 @@ namespace TokenMonitor.Proxy
             {
                 var url = string.IsNullOrWhiteSpace(logUrl) ? (client.Client.RemoteEndPoint?.ToString() ?? "unknown") : logUrl;
                 var fb = firstBytes.Count > 0 ? BitConverter.ToString(firstBytes.ToArray()) : "?";
-                bool isClosed = ex is IOException &&
-                    (ex.Message.Contains("closed", StringComparison.OrdinalIgnoreCase) ||
-                     ex.Message.Contains("reset", StringComparison.OrdinalIgnoreCase) ||
-                     ex.Message.Contains("forcibly", StringComparison.OrdinalIgnoreCase));
-                if (isClosed)
-                    Log.Debug("{Operation}: {Message}. URL={Url} FirstBytes={Bytes}", operation, ex.Message, url, fb);
+
+                if (IsNetworkError(ex))
+                {
+                    Log.Error(ex, "{Operation}: сетевая ошибка. URL={Url} FirstBytes={Bytes}", operation, url, fb);
+                }
+                else if (IsConnectionClosed(ex))
+                {
+                    Log.Debug("{Operation}: соединение закрыто клиентом. {Message}. URL={Url} FirstBytes={Bytes}", operation, ex.Message, url, fb);
+                }
                 else
-                    Log.Error("{Operation}: {Message}. URL={Url} FirstBytes={Bytes}", operation, ex.Message, url, fb);
+                {
+                    Log.Error(ex, "{Operation}: URL={Url} FirstBytes={Bytes}", operation, url, fb);
+                }
             }
         }
 
@@ -350,9 +355,10 @@ namespace TokenMonitor.Proxy
 
                 return (client, stream);
             }
-            catch
+            catch (Exception ex)
             {
                 client.Dispose();
+                Log.Debug(ex, "[Proxy] Не удалось установить туннель к {Host}:{Port}", host, port);
                 throw;
             }
         }
@@ -665,6 +671,45 @@ namespace TokenMonitor.Proxy
         private void AddReceivedBytes(long value) => Interlocked.Add(ref _bytesReceived, value);
 
         private bool IsHopByHopHeader(string name) => _hopByHopHeaders.Contains(name);
+
+        private static bool IsNetworkError(Exception exception)
+        {
+            for (Exception? current = exception; current != null; current = current.InnerException)
+            {
+                if (current is HttpRequestException or SocketException) return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsConnectionClosed(Exception exception)
+        {
+            for (Exception? current = exception; current != null; current = current.InnerException)
+            {
+                switch (current)
+                {
+                    case SocketException socket when socket.SocketErrorCode is
+                        SocketError.ConnectionReset or
+                        SocketError.ConnectionAborted or
+                        SocketError.OperationAborted or
+                        SocketError.Shutdown or
+                        SocketError.NotConnected:
+                        return true;
+
+                    case IOException io when
+                        io.Message.Contains("closed", StringComparison.OrdinalIgnoreCase) ||
+                        io.Message.Contains("reset", StringComparison.OrdinalIgnoreCase) ||
+                        io.Message.Contains("forcibly", StringComparison.OrdinalIgnoreCase) ||
+                        io.Message.Contains("aborted", StringComparison.OrdinalIgnoreCase):
+                        return true;
+
+                    case OperationCanceledException:
+                        return true;
+                }
+            }
+
+            return false;
+        }
 
         private static bool IsLocalOrLoopbackHost(string host)
         {

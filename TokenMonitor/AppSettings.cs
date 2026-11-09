@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Windows.Threading;
 using TokenMonitor.Proxy;
 
 namespace TokenMonitor;
@@ -135,21 +136,16 @@ public static class SettingsStore
     {
         if (File.Exists(SettingsPath))
         {
-            try
+            var json = File.ReadAllText(SettingsPath);
+            var settings = JsonSerializer.Deserialize<AppSettings>(json);
+            if (settings is not null)
             {
-                var json = File.ReadAllText(SettingsPath);
-                var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                if (settings is not null)
-                {
-                    ApplyLegacy(settings, json);
-                    Normalize(settings);
-                    ApplyRuntime(settings);
-                    return settings;
-                }
+                ApplyLegacy(settings, json);
+                Normalize(settings);
+                ApplyRuntime(settings);
+                return settings;
             }
-            catch
-            {
-            }
+
 
             var fallback = new AppSettings();
             Normalize(fallback);

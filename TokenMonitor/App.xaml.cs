@@ -2,6 +2,9 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
+using Serilog;
+using Serilog.Events;
+using TokenMonitor.Proxy;
 
 namespace TokenMonitor;
 
@@ -13,6 +16,9 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        ConfigureLogging();
+        RegisterGlobalExceptionHandlers();
 
         var dumpArgument = e.Args.FirstOrDefault(argument => argument.StartsWith("--dump", StringComparison.OrdinalIgnoreCase));
 
@@ -37,12 +43,48 @@ public partial class App : Application
             return;
         }
 
-        Serilog.Log.Logger = new Serilog.LoggerConfiguration()
-            .MinimumLevel.Information()
-            .CreateLogger();
+        Log.Information("TokenMonitor запущен. Каталог логов: {LogDirectory}", Logging.LogDirectory);
         _ = Task.Run(() => GlobalRouteHttpClient.InitializeAsync());
         MainWindow = new MainWindow();
         MainWindow.Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        Log.Information("TokenMonitor остановлен.");
+        Log.CloseAndFlush();
+        base.OnExit(e);
+    }
+
+    static void ConfigureLogging()
+    {
+#if DEBUG
+        const LogEventLevel minimumLevel = LogEventLevel.Debug;
+#else
+        const LogEventLevel minimumLevel = LogEventLevel.Information;
+#endif
+        Log.Logger = Logging.CreateLoggerConfiguration("tokenmonitor", minimumLevel)
+            .WriteTo.Debug()
+            .CreateLogger();
+    }
+
+    void RegisterGlobalExceptionHandlers()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            Log.Fatal(args.Exception, "Необработанное исключение UI");
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            Log.Fatal(args.ExceptionObject as Exception, "Необработанное исключение приложения");
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Error(args.Exception, "Необработанное исключение фоновой задачи");
+            args.SetObserved();
+        };
     }
 
     static void WriteDump(string? path)
