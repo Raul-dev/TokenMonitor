@@ -17,9 +17,20 @@ public sealed class DataSnapshot
     public string LogPath { get; init; } = string.Empty;
     public DateTime LoadedAt { get; init; }
     public string LoadError { get; init; } = string.Empty;
+
+    public static DataSnapshot Empty(string dbPath = "", string loadError = "") => new()
+    {
+        Sessions = new List<SessionData>(),
+        Live = new List<LiveEvent>(),
+        Signature = 0,
+        DbPath = dbPath,
+        EventsPath = string.Empty,
+        LoadedAt = DateTime.Now,
+        LoadError = loadError,
+    };
 }
 
-public sealed class DataStore
+public sealed class OpenCodeStore
 {
     static readonly DateTime Epoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -28,7 +39,7 @@ public sealed class DataStore
     public string EventsPath => Path.Combine(BaseDir, "token-events.jsonl");
     public string LogPath => Path.Combine(BaseDir, "token-stats.log");
 
-    public DataStore(string? baseDir = null)
+    public OpenCodeStore(string? baseDir = null)
     {
         BaseDir = baseDir
             ?? Environment.GetEnvironmentVariable("OPENCODE_DATA_DIR")

@@ -108,8 +108,8 @@ WPF-приложение для контроля расхода токенов o
 
 Плагины лежат в проекте:
 
-- `TokenMonitor\OpenCodeSetup\token-stats.ts` — статистика токенов и живая лента;
-- `TokenMonitor\OpenCodeSetup\proxy.ts` — направляет HTTP-трафик opencode через локальный прокси TokenMonitor.
+- `OpenCodeSetup\token-stats.ts` — статистика токенов и живая лента;
+- `OpenCodeSetup\proxy.ts` — направляет HTTP-трафик opencode через локальный прокси TokenMonitor.
 
 Устанавливаются одной командой:
 
@@ -121,7 +121,7 @@ WPF-приложение для контроля расхода токенов o
 
 Что делает скрипт:
 
-1. Сравнивает SHA-256 файлов из `TokenMonitor\OpenCodeSetup` с установленными копиями
+1. Сравнивает SHA-256 файлов из `OpenCodeSetup` с установленными копиями
    `%USERPROFILE%\.config\opencode\plugins\token-stats.ts` и `proxy.ts`.
 2. Если версии совпадают — ничего не меняет и сообщает «уже установлен».
 3. Если плагин отсутствует — создаёт каталог `plugins` и копирует файл.
@@ -203,7 +203,7 @@ $env:OPENCODE_DATA_DIR = "D:\other\opencode-data"
 ## Плагин статистики OpenCode
 
 `token-stats.ts` читает историю из базы opencode, а «живую ленту» — из своего лога.
-Эталонная копия лежит в проекте: `TokenMonitor\OpenCodeSetup\token-stats.ts`
+Эталонная копия лежит в проекте: `OpenCodeSetup\token-stats.ts`
 (устанавливается скриптом `install.ps1`, см. раздел «Установка плагинов OpenCode»).
 Рабочая копия: `%USERPROFILE%\.config\opencode\plugins\token-stats.ts` —
 opencode подключает её автоматически из каталога `plugins` при старте.
@@ -415,13 +415,16 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
 | --- | --- |
 | `App.xaml`, `App.xaml.cs` | точка входа, режим `--dump` |
 | `MainWindow.xaml`, `MainWindow.xaml.cs` | интерфейс, автообновление, карточки, дерево |
-| `DataStore.cs` | чтение `opencode.db` и логов, парсинг JSONL/лога |
+| `DataProviders\` | стратегии источников: `IDataProvider`, `DataProviderFactory`, `OpenCode/Cursor/Devin/ClaudeDataProvider`, `BudgetUiModel` |
+| `OpenCodeStore.cs` | чтение `opencode.db` и логов, парсинг JSONL/лога |
+| `CursorStore.cs`, `CursorClient.cs` | история и лимиты Cursor |
+| `DevinStore.cs`, `DevinClient.cs` | метрики Devin API v3 |
 | `Models.cs` | модели сессий/запросов/шагов и элементов дерева |
 | `Fmt.cs` | форматирование чисел и длительности |
 | `AppSettings.cs` | конфиг приложения (settings.json) |
 | `BudgetService.cs` | выбор источника бюджета, LiteLLM `/key/info` |
 | `OpenCodeBudgetProvider.cs` | бюджет OpenCode Go/Console (служба, SQLite-ключ, прямой API) |
 | `install.ps1` | установка/обновление/проверка/удаление плагинов в opencode |
-| `TokenMonitor\OpenCodeSetup\token-stats.ts` | эталонная копия плагина статистики |
-| `TokenMonitor\OpenCodeSetup\proxy.ts` | эталонная копия прокси-плагина |
+| `OpenCodeSetup\token-stats.ts` | эталонная копия плагина статистики |
+| `OpenCodeSetup\proxy.ts` | эталонная копия прокси-плагина |
 | `run.ps1` | сборка при необходимости и запуск |

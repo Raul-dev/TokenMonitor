@@ -20,7 +20,7 @@ $plugins = @(
     [pscustomobject]@{
         Name = 'token-stats'
         Title = 'статистика токенов'
-        Source = Join-Path $PSScriptRoot 'TokenMonitor\OpenCodeSetup\token-stats.ts'
+        Source = Join-Path $PSScriptRoot 'OpenCodeSetup\token-stats.ts'
         Target = Join-Path $pluginsDir 'token-stats.ts'
         SourceHash = $null
         Installed = $false
@@ -30,7 +30,7 @@ $plugins = @(
     [pscustomobject]@{
         Name = 'proxy'
         Title = 'локальный прокси'
-        Source = Join-Path $PSScriptRoot 'TokenMonitor\OpenCodeSetup\proxy.ts'
+        Source = Join-Path $PSScriptRoot 'OpenCodeSetup\proxy.ts'
         Target = Join-Path $pluginsDir 'proxy.ts'
         SourceHash = $null
         Installed = $false

@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using TokenMonitor.DataProviders;
 using TokenMonitor.Proxy;
 
 namespace TokenMonitor;
@@ -17,11 +18,8 @@ public partial class MainWindow : Window
     static readonly Brush BudgetCritical = new SolidColorBrush(Color.FromRgb(0xB9, 0x1C, 0x1C));
     static readonly Brush BudgetMuted = new SolidColorBrush(Color.FromRgb(0x8A, 0x8F, 0x98));
 
-    readonly DataStore store = new();
-    readonly CursorStore cursorStore;
-    readonly DevinStore devinStore;
     readonly AppSettings settings;
-    readonly BudgetService budgetService;
+    readonly Dictionary<DataSource, IDataProvider> dataProviders = new();
     readonly DispatcherTimer timer;
     readonly DispatcherTimer proxyTimer;
 
@@ -29,11 +27,6 @@ public partial class MainWindow : Window
     CancellationTokenSource? localProxyCts;
 
     DataSnapshot? snapshot;
-    BudgetInfo? budget;
-    CursorPeriodUsage? cursorPeriod;
-    DevinSnapshot? devinSnapshot;
-    DateTime lastBudgetFetch = DateTime.MinValue;
-    DateTime lastCursorPeriodFetch = DateTime.MinValue;
     List<Node> roots = new();
     Node? selected;
     long signature;
@@ -42,6 +35,11 @@ public partial class MainWindow : Window
     bool sourceReady;
     bool suppressSourceChange;
     DataSource currentSource = DataSource.OpenCode;
+
+    IDataProvider CurrentProvider =>
+        dataProviders.TryGetValue(currentSource, out var provider)
+            ? provider
+            : dataProviders[DataSource.OpenCode];
 
     // Свойство, к которому привяжется ComboBox
     public Dictionary<string, ProviderConfigEx> Providers { get; set; } = new();
@@ -62,35 +60,20 @@ public partial class MainWindow : Window
             return;
 
         currentSource = settings.LastSource;
-        budgetService = new BudgetService(settings);
-        cursorStore = new CursorStore(settings);
-        devinStore = new DevinStore(settings);
+        dataProviders = DataProviderFactory.Create(settings);
         SettingsStore.EnsureExists(settings);
 
-        // Формирование подсказки для Devin
-        var devinConfigured = !string.IsNullOrWhiteSpace(settings.Devin.ApiKey) && !string.IsNullOrWhiteSpace(settings.Devin.OrgId);
-        var devinPathText = devinConfigured ? $"Devin API v3 (org: {settings.Devin.OrgId})" : "Devin API не настроен";
-        var devinTreeHint = devinConfigured ? "Статистика использования Devin API v3 по категориям задач." : "Статистика использования Devin API v3. Настройте API ключ и Org ID в конфиге.";
+        Providers = dataProviders.Values
+            .OrderBy(provider => provider.Source)
+            .ToDictionary(
+                provider => provider.DisplayName,
+                provider => new ProviderConfigEx(
+                    provider.Config,
+                    provider.Source,
+                    provider.PathText,
+                    provider.TreeHint));
 
-        Providers = new Dictionary<string, ProviderConfigEx>
-        {
-            { "OpenCode", new ProviderConfigEx(settings.OpenCode, DataSource.OpenCode, store.DbPath, "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode.") },
-            { "Cursor", new ProviderConfigEx(settings.Cursor, DataSource.Cursor, cursorStore.EventsPath, "Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в Cursor.") },
-            { "Claude", new ProviderConfigEx(settings.Claude, DataSource.Claude, "Claude - не реализовано", "Claude - не реализовано") },
-            { "Devin", new ProviderConfigEx(settings.Devin, DataSource.Devin, devinPathText, devinTreeHint) },
-        };
-
-        // Диагностика настроек Devin
-        var apiKeyInfo = string.IsNullOrWhiteSpace(settings.Devin.ApiKey) ? "ApiKey: null/empty" : $"ApiKey: {settings.Devin.ApiKey?.Substring(0, Math.Min(20, settings.Devin.ApiKey.Length))}...";
-        var orgIdInfo = string.IsNullOrWhiteSpace(settings.Devin.OrgId) ? "OrgId: null/empty" : $"OrgId: {settings.Devin.OrgId}";
-        var logPath = Path.Combine(Path.GetTempPath(), "tokenmonitor_debug.txt");
-        File.WriteAllText(logPath, $"[{DateTime.Now}] Devin config loaded: {apiKeyInfo}, {orgIdInfo}");
-
-        // Проверка настроек Devin при старте
-        if (!devinConfigured)
-        {
-            StatusText.Text = $"Devin API не настроен: {apiKeyInfo}, {orgIdInfo}";
-        }
+ 
         DataContext = this;
 
         LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
@@ -198,79 +181,18 @@ public partial class MainWindow : Window
             ? $"локальный прокси: {listenUrl}\nupstream: напрямую"
             : $"локальный прокси: {listenUrl}\nupstream: {upstream.Scheme}://{upstream.Host}:{upstream.Port}";
 
-    async void RefreshButton_Click(object sender, RoutedEventArgs e)
-    {
-        lastBudgetFetch = DateTime.MinValue;
-        await RefreshAsync();
-    }
+    async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync(force: true);
 
-    async Task RefreshAsync()
+    async Task RefreshAsync(bool force = false)
     {
         if (busy) return;
         busy = true;
 
         try
         {
-            DataSnapshot loaded;
-            if (currentSource == DataSource.OpenCode)
-            {
-                try
-                {
-                    loaded = await Task.Run(store.Load);
-                }
-                catch (FileNotFoundException)
-                {
-                    loaded = new DataSnapshot
-                    {
-                        Sessions = new List<SessionData>(),
-                        Live = new List<LiveEvent>(),
-                        Signature = 0,
-                        DbPath = store.DbPath,
-                        EventsPath = string.Empty,
-                        LoadedAt = DateTime.Now,
-                    };
-                    StatusText.Text = "База opencode не найдена. Запустите opencode и выполните хотя бы один запрос.";
-                }
-            }
-            else if (currentSource == DataSource.Cursor)
-            {
-                loaded = await cursorStore.LoadAsync(refreshRemote: true);
-            }
-            else if (currentSource == DataSource.Devin)
-            {
-                devinSnapshot = await devinStore.LoadAsync();
-                loaded = DevinStore.ToDataSnapshot(devinSnapshot);
-
-                // Обновление подсказки под деревом с ошибками Devin API
-                var errors = new List<string>();
-                if (devinSnapshot.UsageMetrics?.Error is not null)
-                    errors.Add($"usage: {devinSnapshot.UsageMetrics.Error}");
-                if (devinSnapshot.SessionMetrics?.Error is not null)
-                    errors.Add($"session: {devinSnapshot.SessionMetrics.Error}");
-                if (devinSnapshot.CategoryMetrics?.Error is not null)
-                    errors.Add($"category: {devinSnapshot.CategoryMetrics.Error}");
-
-                if (errors.Count > 0)
-                {
-                    TreeHint.Text = $"Devin API: {string.Join("; ", errors)}";
-                }
-                else
-                {
-                    TreeHint.Text = "Статистика использования Devin API v3 по категориям задач.";
-                }
-            }
-            else
-            {
-                loaded = new DataSnapshot
-                {
-                    Sessions = new List<SessionData>(),
-                    Live = new List<LiveEvent>(),
-                    Signature = 0,
-                    DbPath = "Claude - не реализовано",
-                    EventsPath = string.Empty,
-                    LoadedAt = DateTime.Now,
-                };
-            }
+            var provider = CurrentProvider;
+            var result = await provider.LoadAsync(force);
+            var loaded = result.Snapshot;
 
             snapshot = loaded;
             DbPathText.Text = loaded.DbPath;
@@ -284,81 +206,9 @@ public partial class MainWindow : Window
             UpdateLive(loaded);
             UpdateKpi();
             UpdateAlerts(loaded);
-
-            var requests = loaded.Sessions.Sum(s => s.Requests.Count);
-
-            if (!string.IsNullOrWhiteSpace(loaded.LoadError))
-            {
-                StatusText.Text = $"загрузка: {loaded.LoadError} · сессий {loaded.Sessions.Count} · запросов {requests}";
-            }
-            else if (currentSource == DataSource.Devin && devinSnapshot is not null)
-            {
-                // Показать ошибки Devin API
-                var errors = new List<string>();
-                if (devinSnapshot.UsageMetrics?.Error is not null)
-                    errors.Add($"usage: {devinSnapshot.UsageMetrics.Error}");
-                if (devinSnapshot.SessionMetrics?.Error is not null)
-                    errors.Add($"session: {devinSnapshot.SessionMetrics.Error}");
-                if (devinSnapshot.CategoryMetrics?.Error is not null)
-                    errors.Add($"category: {devinSnapshot.CategoryMetrics.Error}");
-
-                if (errors.Count > 0)
-                {
-                    StatusText.Text = $"Devin API: {string.Join("; ", errors)} · сессий {loaded.Sessions.Count}";
-                }
-                else if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
-                {
-                    // Keep the error message
-                }
-                else
-                {
-                    StatusText.Text = $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
-                }
-            }
-            else if (StatusText.Text.StartsWith("ошибка") || StatusText.Text.StartsWith("База opencode"))
-            {
-                // Keep the error message
-            }
-            else
-            {
-                StatusText.Text = $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
-            }
-
-            if (currentSource == DataSource.OpenCode && loaded.Sessions.Count == 0 && File.Exists(store.DbPath))
-            {
-                if (string.IsNullOrWhiteSpace(loaded.LoadError))
-                {
-                    StatusText.Text = "База opencode пуста. Запустите opencode и выполните хотя бы один запрос.";
-                }
-            }
-
-            if (currentSource == DataSource.OpenCode)
-            {
-                if (budget is null || (DateTime.UtcNow - lastBudgetFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
-                {
-                    lastBudgetFetch = DateTime.UtcNow;
-                    budget = await budgetService.GetAsync();
-                    UpdateBudgetUi();
-                }
-            }
-            else if (currentSource == DataSource.Cursor)
-            {
-                if (cursorPeriod is null || (DateTime.UtcNow - lastCursorPeriodFetch).TotalSeconds >= settings.BudgetRefreshSeconds)
-                {
-                    lastCursorPeriodFetch = DateTime.UtcNow;
-                    cursorPeriod = await cursorStore.GetPeriodAsync();
-                    UpdateCursorBudgetUi();
-                }
-            }
-            else if (currentSource == DataSource.Devin)
-            {
-                UpdateDevinBudgetUi();
-            }
-            else
-            {
-                BudgetText.Text = "—";
-                BudgetDetail.Text = "Claude не реализован";
-            }
+            ApplyStatus(loaded, result);
+            ApplyTreeHint(provider, result);
+            ApplyBudget(await provider.GetBudgetAsync(force));
         }
         catch (Exception error)
         {
@@ -368,6 +218,39 @@ public partial class MainWindow : Window
         {
             busy = false;
         }
+    }
+
+    void ApplyStatus(DataSnapshot loaded, ProviderResult result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.StatusNote))
+        {
+            StatusText.Text = result.StatusNote;
+            return;
+        }
+
+        var requests = loaded.Sessions.Sum(session => session.Requests.Count);
+        StatusText.Text = !string.IsNullOrWhiteSpace(loaded.LoadError)
+            ? $"загрузка: {loaded.LoadError} · сессий {loaded.Sessions.Count} · запросов {requests}"
+            : $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
+    }
+
+    void ApplyTreeHint(IDataProvider provider, ProviderResult result) =>
+        TreeHint.Text = result.TreeHint ?? provider.TreeHint;
+
+    void ApplyBudget(BudgetUiModel model)
+    {
+        BudgetText.Text = model.Text;
+        BudgetText.Foreground = model.Severity switch
+        {
+            BudgetSeverity.Critical => BudgetCritical,
+            BudgetSeverity.Warning => BudgetWarning,
+            BudgetSeverity.Muted => BudgetMuted,
+            _ => BudgetNormal,
+        };
+
+        BudgetDetail.Text = model.Detail;
+        BudgetText.ToolTip = model.Tooltip;
+        BudgetDetail.ToolTip = model.Tooltip;
     }
 
     void RebuildTree(DataSnapshot loaded)
@@ -643,189 +526,11 @@ public partial class MainWindow : Window
         RequestDetail.Text = $"шагов {focusRequest.Steps.Count} · {Fmt.Duration(focusRequest.DurationMs)} · in {Fmt.Tokens(focusRequest.Tokens.Input)} / out {Fmt.Tokens(focusRequest.Tokens.Output)} · кэш {focusRequest.Tokens.CacheHitText} / W {focusRequest.Tokens.CacheWriteText}";
     }
 
-    void UpdateBudgetUi()
-    {
-        if (currentSource == DataSource.Cursor)
-        {
-            UpdateCursorBudgetUi();
-            return;
-        }
-
-        if (currentSource == DataSource.Devin)
-        {
-            UpdateDevinBudgetUi();
-            return;
-        }
-
-        if (budget is null) return;
-
-        if (budget.Error is not null || (budget.Display == BudgetDisplay.Money && budget.Spend is null))
-        {
-            var error = budget.Error ?? "нет данных";
-            BudgetText.Text = "—";
-            BudgetText.Foreground = BudgetMuted;
-            BudgetDetail.Text = error;
-            BudgetText.ToolTip = error;
-            BudgetDetail.ToolTip = error;
-            return;
-        }
-
-        BudgetText.Foreground = budget.Ratio switch
-        {
-            >= 0.9 => BudgetCritical,
-            >= 0.7 => BudgetWarning,
-            _ => BudgetNormal,
-        };
-
-        var details = new List<string>();
-        var tooltipLines = new List<string>();
-
-        if (budget.Display == BudgetDisplay.Percent)
-        {
-            var percent = budget.Percent ?? 0;
-            BudgetText.Text = $"{percent:0.0}%";
-
-            if (budget.Plan is { } plan && !string.IsNullOrWhiteSpace(plan)) details.Add(plan);
-            details.AddRange(budget.Meters.Select(meter => $"{meter.Label} {meter.Percent:0.0}%"));
-            if (budget.Meters.Count == 0 && budget.ResetAt is { } reset)
-                details.Add($"сброс {reset:dd.MM HH:mm}");
-
-            tooltipLines.Add($"использовано {percent:0.0}%");
-            AppendMeterTooltip(tooltipLines, budget.Meters);
-            if (budget.Meters.Count == 0 && budget.ResetAt is { } tooltipReset)
-                tooltipLines.Add($"сброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}");
-        }
-        else
-        {
-            var spend = budget.Spend ?? 0;
-            BudgetText.Text = budget.MaxBudget is { } max
-                ? $"${spend:0.00} / ${max:0.00}"
-                : $"${spend:0.00}";
-
-            if (budget.Remaining is { } remaining) details.Add($"осталось ${remaining:0.00}");
-            if (budget.ResetAt is { } reset) details.Add($"сброс {reset:dd.MM HH:mm}");
-            if (budget.Plan is { } plan && !string.IsNullOrWhiteSpace(plan)) details.Add(plan);
-
-            tooltipLines.Add($"${spend:0.0000}" + (budget.MaxBudget is { } limit ? $" из ${limit:0.00}" : string.Empty));
-            if (budget.ResetAt is { } tooltipReset)
-                tooltipLines.Add($"сброс лимита: {tooltipReset:dd.MM.yyyy HH:mm}");
-            if (budget.Meters.Count > 0)
-            {
-                tooltipLines.Add("лимиты OpenCode:");
-                AppendMeterTooltip(tooltipLines, budget.Meters, "  ");
-            }
-        }
-
-        BudgetDetail.Text = details.Count > 0 ? string.Join(" · ", details) : "—";
-
-        if (budget.Alias is { } alias)
-            tooltipLines.Add((budget.Provider == "OpenCode" ? "аккаунт: " : "ключ: ") + alias);
-        if (!string.IsNullOrWhiteSpace(budget.Provider))
-            tooltipLines.Add("источник: " + budget.Provider);
-        tooltipLines.Add("адрес: " + (budget.SourceUrl ?? BudgetService.KeyInfoUrl(settings.LiteLLMBaseUrl)));
-
-        var tooltip = string.Join("\n", tooltipLines);
-        BudgetText.ToolTip = tooltip;
-        BudgetDetail.ToolTip = tooltip;
-    }
-
-    static void AppendMeterTooltip(List<string> lines, IReadOnlyList<BudgetMeter> meters, string indent = "")
-    {
-        foreach (var meter in meters)
-        {
-            var line = $"{indent}{meter.Title}: {meter.Percent:0.0}%";
-            if (meter.Limited) line += " · лимит исчерпан";
-            if (meter.ResetAt is { } reset) line += $" · сброс {reset:dd.MM.yyyy HH:mm}";
-            lines.Add(line);
-        }
-    }
-
-    void UpdateCursorBudgetUi()
-    {
-        if (cursorPeriod is null) return;
-
-        if (cursorPeriod.Error is not null)
-        {
-            BudgetText.Text = "—";
-            BudgetText.Foreground = BudgetMuted;
-            BudgetDetail.Text = cursorPeriod.Error;
-            BudgetText.ToolTip = cursorPeriod.Error;
-            BudgetDetail.ToolTip = cursorPeriod.Error;
-            return;
-        }
-
-        var totalPercent = cursorPeriod.TotalPercent;
-        BudgetText.Text = $"{totalPercent:0.0}%";
-
-        BudgetText.Foreground = totalPercent switch
-        {
-            >= 90 => BudgetCritical,
-            >= 70 => BudgetWarning,
-            _ => BudgetNormal,
-        };
-
-        var details = new List<string>();
-        if (cursorPeriod.CycleStart is { } start && cursorPeriod.CycleEnd is { } end)
-            details.Add($"{start:dd.MM} - {end:dd.MM}");
-        if (!string.IsNullOrWhiteSpace(cursorPeriod.Membership))
-            details.Add(cursorPeriod.Membership);
-        BudgetDetail.Text = string.Join(" · ", details);
-
-        var tooltip = $"Auto: {cursorPeriod.AutoPercent:0.0}% · API: {cursorPeriod.ApiPercent:0.0}%";
-        if (!string.IsNullOrWhiteSpace(cursorPeriod.DisplayMessage))
-            tooltip += $"\n{cursorPeriod.DisplayMessage}";
-        if (!string.IsNullOrWhiteSpace(cursorPeriod.Source))
-            tooltip += $"\nисточник: {cursorPeriod.Source}";
-
-        BudgetText.ToolTip = tooltip;
-        BudgetDetail.ToolTip = tooltip;
-    }
-
-    void UpdateDevinBudgetUi()
-    {
-        if (devinSnapshot is null) return;
-
-        if (devinSnapshot.UsageMetrics?.Error is not null)
-        {
-            BudgetText.Text = "—";
-            BudgetText.Foreground = BudgetMuted;
-            BudgetDetail.Text = devinSnapshot.UsageMetrics.Error;
-            BudgetText.ToolTip = devinSnapshot.UsageMetrics.Error;
-            BudgetDetail.ToolTip = devinSnapshot.UsageMetrics.Error;
-            return;
-        }
-
-        var usage = devinSnapshot.UsageMetrics;
-        var sessions = usage?.SessionsCount ?? 0;
-        BudgetText.Text = sessions.ToString();
-
-        BudgetText.Foreground = BudgetNormal;
-
-        var details = new List<string>();
-        if (usage?.PrsCreatedCount > 0)
-            details.Add($"PRs: {usage.PrsCreatedCount}");
-        if (usage?.PrsMergedCount > 0)
-            details.Add($"merged: {usage.PrsMergedCount}");
-        if (usage?.SearchesCount > 0)
-            details.Add($"searches: {usage.SearchesCount}");
-        BudgetDetail.Text = details.Count > 0 ? string.Join(" · ", details) : "сессий за месяц";
-
-        var tooltip = $"Сессий: {sessions}";
-        if (devinSnapshot.SessionMetrics?.AvgAcusPerSession > 0)
-            tooltip += $"\nСреднее ACU/сессия: {devinSnapshot.SessionMetrics.AvgAcusPerSession:0.0}";
-        if (devinSnapshot.CategoryMetrics?.Categories.Count > 0)
-            tooltip += $"\nКатегорий: {devinSnapshot.CategoryMetrics.Categories.Count}";
-        tooltip += "\nисточник: Devin API v3";
-
-        BudgetText.ToolTip = tooltip;
-        BudgetDetail.ToolTip = tooltip;
-    }
-
     void ConfigLink_Click(object sender, RoutedEventArgs e)
     {
         SettingsStore.EnsureExists(settings);
 
-        var configPath = CurrentProvider()?.ConfigPath ?? settings.For(currentSource).ConfigPath;
+        var configPath = CurrentProvider.Config.ConfigPath;
 
         try
         {
@@ -868,14 +573,19 @@ public partial class MainWindow : Window
     void SessionMenu_Opened(object sender, RoutedEventArgs e)
     {
         var session = SessionOf(selected);
-        var enabled = session is not null && Directory.Exists(session.Directory);
+        var enabled = session is not null
+            && Directory.Exists(session.Directory)
+            && CurrentProvider.SupportsSessionLaunch;
 
         ResumeTuiItem.IsEnabled = enabled;
         ResumeForkItem.IsEnabled = enabled;
         CopySessionIdItem.IsEnabled = session is not null;
 
-        ResumeTuiItem.ToolTip = enabled ? $"opencode -s {session!.Id}" : "нужна сессия с существующим каталогом";
-        ResumeForkItem.ToolTip = enabled ? $"opencode -s {session!.Id} --fork" : "нужна сессия с существующим каталогом";
+        var disabledHint = CurrentProvider.SupportsSessionLaunch
+            ? "нужна сессия с существующим каталогом"
+            : "источник не поддерживает запуск сессий";
+        ResumeTuiItem.ToolTip = enabled ? $"opencode -s {session!.Id}" : disabledHint;
+        ResumeForkItem.ToolTip = enabled ? $"opencode -s {session!.Id} --fork" : disabledHint;
     }
 
     void ResumeTui_Click(object sender, RoutedEventArgs e) => LaunchTui(fork: false);
@@ -1019,12 +729,11 @@ public partial class MainWindow : Window
         settings.LastSource = currentSource;
         SettingsStore.TrySave(settings);
 
-        lastBudgetFetch = DateTime.MinValue;
-        lastCursorPeriodFetch = DateTime.MinValue;
-        signature = 0;
+        // long.MinValue гарантирует перестройку дерева даже для пустого снапшота (Signature = 0).
+        signature = long.MinValue;
 
         ApplySourceChrome();
-        await RefreshAsync();
+        await RefreshAsync(force: true);
     }
 
     void UpdateComboBoxSelection()
@@ -1047,17 +756,14 @@ public partial class MainWindow : Window
         suppressSourceChange = false;
     }
 
-    ProviderConfigEx? CurrentProvider() =>
-        Providers.Values.FirstOrDefault(p => p.Source == currentSource);
-
     ProviderConfigEx? SelectedProvider() => SourceComboBox.SelectedValue as ProviderConfigEx
         ?? (SourceComboBox.SelectedItem is KeyValuePair<string, ProviderConfigEx> pair ? pair.Value : null);
 
     void ApplySourceChrome()
     {
-        if (CurrentProvider() is not { } provider) return;
+        var provider = CurrentProvider;
         DbPathText.Text = provider.PathText;
         TreeHint.Text = provider.TreeHint;
-        ConfigLink.ToolTip = provider.ConfigPath;
+        ConfigLink.ToolTip = provider.Config.ConfigPath;
     }
 }

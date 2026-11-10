@@ -89,7 +89,7 @@ public partial class App : Application
 
     static void WriteDump(string? path)
     {
-        var store = new DataStore();
+        var store = new OpenCodeStore();
         var snapshot = store.Load();
         var settings = SettingsStore.Load();
         var budget = Task.Run(() => new BudgetService(settings).GetAsync()).GetAwaiter().GetResult();
