@@ -10,7 +10,10 @@ public enum DataSource
     OpenCode,
     Cursor,
     Claude,
-    Devin
+    Devin,
+    // Новые источники добавляются только в конец: иначе сохранённый
+    // числовой LastSource в settings.json сдвинется.
+    DeepSeek
 }
 
 public enum BudgetSource
@@ -27,6 +30,10 @@ public sealed class ProviderConfig
     public bool IsEnabled { get; set; } = true;
     public string? StateDbPath { get; set; }
     public string? EventsPath { get; set; }
+
+    /// <summary>Путь к SQLite-базе источника (DeepSeek: tokens.db плагина).</summary>
+    public string? DbPath { get; set; }
+
     public string? ApiKey { get; set; }
     public string? OrgId { get; set; }
 }
@@ -104,11 +111,19 @@ public sealed class AppSettings
         OrgId = string.Empty
     };
 
+    public ProviderConfig DeepSeek { get; set; } = new()
+    {
+        Name = "DeepSeek",
+        ConfigPath = SettingsStore.DefaultDeepSeekConfigPath,
+        DbPath = SettingsStore.DefaultDeepSeekDbPath
+    };
+
     public ProviderConfig For(DataSource source) => source switch
     {
         DataSource.Cursor => Cursor,
         DataSource.Claude => Claude,
         DataSource.Devin => Devin,
+        DataSource.DeepSeek => DeepSeek,
         _ => OpenCode,
     };
 }
@@ -126,6 +141,24 @@ public static class SettingsStore
 
     public static string DefaultDevinConfigPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Devin", "config.json");
+
+    /// <summary>Домашний каталог DSH: $DSH_HOME, иначе %USERPROFILE%\.dsh.</summary>
+    public static string DshHome
+    {
+        get
+        {
+            var configured = Environment.GetEnvironmentVariable("DSH_HOME");
+            if (!string.IsNullOrWhiteSpace(configured)) return configured.Trim();
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh");
+        }
+    }
+
+    /// <summary>Патч профиля desktop — там живёт config плагина token-logger.</summary>
+    public static string DefaultDeepSeekConfigPath =>
+        Path.Combine(DshHome, "profiles", "desktop", "cordis.patch.yml");
+
+    /// <summary>База, которую пишет плагин @local/dsh-token-logger.</summary>
+    public static string DefaultDeepSeekDbPath => Path.Combine(DshHome, "tokens", "tokens.db");
 
     public static string SettingsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TokenMonitor");
@@ -201,6 +234,9 @@ public static class SettingsStore
         settings.Cursor = EnsureProvider(settings.Cursor, "Cursor", DefaultCursorConfigPath);
         settings.Claude = EnsureProvider(settings.Claude, "Claude", DefaultClaudeConfigPath);
         settings.Devin = EnsureProvider(settings.Devin, "Devin", DefaultDevinConfigPath);
+        settings.DeepSeek = EnsureProvider(settings.DeepSeek, "DeepSeek", DefaultDeepSeekConfigPath);
+        if (string.IsNullOrWhiteSpace(settings.DeepSeek.DbPath))
+            settings.DeepSeek.DbPath = DefaultDeepSeekDbPath;
     }
 
     static void ApplyRuntime(AppSettings settings) =>
@@ -286,6 +322,14 @@ public static class SettingsStore
                     if (devinKey is not null) settings.Devin.ApiKey = devinKey;
                     if (orgId is not null) settings.Devin.OrgId = orgId;
                 }
+            }
+
+            if (!root.TryGetProperty(nameof(AppSettings.DeepSeek), out _))
+            {
+                var path = FirstNonEmpty(root, "ConfigDeepSeek");
+                var dbPath = FirstNonEmpty(root, "DeepSeekDbPath");
+                if (path is not null) settings.DeepSeek.ConfigPath = path;
+                if (dbPath is not null) settings.DeepSeek.DbPath = dbPath;
             }
         }
         catch

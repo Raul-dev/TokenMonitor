@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -36,6 +36,9 @@ public partial class MainWindow : Window
     bool suppressSourceChange;
     DataSource currentSource = DataSource.OpenCode;
 
+    string? proxyClientsHint;
+    DateTime proxyClientsChecked = DateTime.MinValue;
+
     IDataProvider CurrentProvider =>
         dataProviders.TryGetValue(currentSource, out var provider)
             ? provider
@@ -43,6 +46,81 @@ public partial class MainWindow : Window
 
     // Свойство, к которому привяжется ComboBox
     public Dictionary<string, ProviderConfigEx> Providers { get; set; } = new();
+
+    /// <summary>
+    /// Сколько символов показывать в шапке. Полный текст всегда уходит в ToolTip:
+    /// длинные пути/ошибки иначе растягивают шапку и сдвигают ComboBox.
+    /// </summary>
+    const int StatusDisplayChars = 200;
+    const int PathDisplayChars = 120;
+    const int BudgetDetailChars = 220;
+
+    static string Compact(string value, int max)
+    {
+        if (value.Length <= max) return value;
+        // Путь/ошибку показываем началом и концом — так видно и место, и имя файла.
+        var tail = Math.Max(12, max / 3);
+        var head = Math.Max(12, max - tail - 1);
+        return value[..head].TrimEnd() + "…" + value[^tail..];
+    }
+
+    /// <summary>
+    /// Назначает тултип только при изменении: перезапись открытого тултипа
+    /// закрывает его (актуально для счётчика прокси, который обновляется каждую секунду).
+    /// </summary>
+    static void SetTooltip(FrameworkElement target, string? text)
+    {
+        var value = string.IsNullOrWhiteSpace(text) ? null : text;
+        if (value is null)
+        {
+            if (target.ToolTip is not null) target.ToolTip = null;
+            return;
+        }
+
+        if (target.ToolTip is ToolTip existing
+            && existing.Content is TextBlock existingText
+            && string.Equals(existingText.Text, value, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Явный ToolTip с переносом: длинная ошибка читается целиком, а не
+        // одной строкой, уходящей за край экрана. Style = null отключает
+        // шаблон из Application.Resources, рассчитанный на строковый content.
+        target.ToolTip = new ToolTip
+        {
+            Style = null,
+            Padding = new Thickness(8, 6, 8, 6),
+            MaxWidth = 760,
+            Content = new TextBlock
+            {
+                Text = value,
+                TextWrapping = TextWrapping.Wrap,
+                MaxWidth = 720,
+            },
+        };
+    }
+
+    static void SetStatusText(TextBlock target, string? text)
+    {
+        var full = (text ?? string.Empty).Trim();
+        target.Text = Compact(full, StatusDisplayChars);
+        SetTooltip(target, full);
+    }
+
+    static void SetPathText(TextBlock target, string? text)
+    {
+        var full = (text ?? string.Empty).Trim();
+        target.Text = Compact(full, PathDisplayChars);
+        SetTooltip(target, full);
+    }
+
+    static void SetHintText(TextBlock target, string? text)
+    {
+        var full = (text ?? string.Empty).Trim();
+        target.Text = full;
+        SetTooltip(target, full);
+    }
 
     public MainWindow()
     {
@@ -54,7 +132,7 @@ public partial class MainWindow : Window
         }
         catch (JsonException error)
         {
-            StatusText.Text =  $"Ошибка Settings: Строка: {error.LineNumber}, Позиция: {error.BytePositionInLine}";
+            SetStatusText(StatusText, $"Ошибка Settings: Строка: {error.LineNumber}, Позиция: {error.BytePositionInLine}");
         }
         if (settings == null)
             return;
@@ -76,7 +154,7 @@ public partial class MainWindow : Window
  
         DataContext = this;
 
-        LivePathText.Text = "источник: token-events.jsonl (плагин token-stats.ts)";
+        LivePathText.Text = string.Empty;
         SourceConfigLink.ToolTip = SettingsStore.SettingsPath;
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         timer.Tick += async (_, _) => await RefreshAsync();
@@ -126,7 +204,7 @@ public partial class MainWindow : Window
         localProxyCts = cts;
 
         ProxyTrafficText.Visibility = Visibility.Visible;
-        ProxyTrafficText.ToolTip = BuildProxyTooltip(listenUrl, upstream);
+        SetTooltip(ProxyTrafficText, BuildProxyTooltip(listenUrl, upstream) + "\nстатус: запускается");
 
         _ = Task.Run(async () =>
         {
@@ -139,7 +217,7 @@ public partial class MainWindow : Window
             }
             catch (Exception error)
             {
-                await Dispatcher.InvokeAsync(() => StatusText.Text = $"локальный прокси: {error.Message}");
+                await Dispatcher.InvokeAsync(() => SetStatusText(StatusText, $"локальный прокси: {error.Message}"));
             }
         });
 
@@ -169,9 +247,169 @@ public partial class MainWindow : Window
         ProxyTrafficText.Text = $"↑ {FormatMb(proxy.BytesSent)} · ↓ {FormatMb(proxy.BytesReceived)} МБ";
 
         var upstream = settings.ProxySettings.CreateUpstream();
-        ProxyTrafficText.ToolTip =
-            BuildProxyTooltip(settings.ProxySettings.ListenUrl, upstream) +
-            (proxy.IsRunning ? "\nстатус: работает" : "\nстатус: не запущен");
+        var listenUrl = string.IsNullOrWhiteSpace(settings.ProxySettings.ListenUrl)
+            ? ProxySettings.DefaultListenUrl
+            : settings.ProxySettings.ListenUrl;
+        var tooltip = BuildProxyTooltip(listenUrl, upstream)
+            + (proxy.IsRunning ? "\nстатус: работает" : "\nстатус: не запущен")
+            + "\n" + GetProxyClientsHint(listenUrl);
+        SetTooltip(ProxyTrafficText, tooltip);
+    }
+
+    /// <summary>
+    /// Фактическое состояние клиентов, а не утверждение «трафик учитывается»:
+    /// счётчик растёт только когда клиент действительно настроен на этот прокси.
+    /// Кэш на 15 секунд, чтобы не читать конфиги каждую секунду.
+    /// </summary>
+    string GetProxyClientsHint(string listenUrl)
+    {
+        if (proxyClientsHint is not null && (DateTime.UtcNow - proxyClientsChecked).TotalSeconds < 15)
+            return proxyClientsHint;
+
+        proxyClientsChecked = DateTime.UtcNow;
+        proxyClientsHint =
+            "OpenCode: " + DescribeOpenCodeProxy(listenUrl) + "\n" +
+            "DeepSeek: " + DescribeDeepSeekProxy(listenUrl);
+        return proxyClientsHint;
+    }
+
+    static string DescribeOpenCodeProxy(string listenUrl)
+    {
+        var configDir = Environment.GetEnvironmentVariable("OPENCODE_CONFIG_DIR");
+        if (string.IsNullOrWhiteSpace(configDir))
+        {
+            configDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".config", "opencode");
+        }
+
+        var path = Path.Combine(configDir, "token-monitor-proxy.json");
+        if (!File.Exists(path)) return "не настроен (нет token-monitor-proxy.json)";
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return "конфиг не читается";
+
+            var enabled = !root.TryGetProperty("enabled", out var enabledElement)
+                || enabledElement.ValueKind != JsonValueKind.False;
+            if (!enabled) return "отключён в конфиге";
+
+            var url = root.TryGetProperty("proxyUrl", out var urlElement)
+                && urlElement.ValueKind == JsonValueKind.String
+                    ? urlElement.GetString()
+                    : null;
+
+            if (string.IsNullOrWhiteSpace(url)) return "не настроен (пустой proxyUrl)";
+            return SameProxy(url, listenUrl)
+                ? "через этот прокси"
+                : $"другой прокси: {url}";
+        }
+        catch
+        {
+            return "конфиг не читается";
+        }
+    }
+
+    static string DescribeDeepSeekProxy(string listenUrl)
+    {
+        var processValue = FirstEnvironment("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy");
+        var persistedValue = FirstPersistedEnvironment("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy");
+        var envPath = Path.Combine(SettingsStore.DshHome, ".env");
+        var fileValue = ReadEnvValue(envPath, "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy");
+
+        var value = processValue ?? persistedValue ?? fileValue;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return File.Exists(envPath)
+                ? "не настроен (в .env нет прокси)"
+                : "не настроен (нет .env и переменных окружения)";
+        }
+
+        var source = processValue is not null
+            ? "переменная окружения"
+            : persistedValue is not null
+                ? "переменная пользователя"
+                : ".env";
+        return SameProxy(value, listenUrl)
+            ? $"через этот прокси ({source})"
+            : $"другой прокси: {value} ({source})";
+    }
+
+    static string? FirstEnvironment(params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+        }
+
+        return null;
+    }
+
+    /// <summary>Постоянные переменные пользователя (setx / «Переменные среды»): DSH Desktop стартует с ними.</summary>
+    static string? FirstPersistedEnvironment(params string[] names)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("Environment");
+            if (key is null) return null;
+            foreach (var name in names)
+            {
+                if (key.GetValue(name) is string value && !string.IsNullOrWhiteSpace(value)) return value.Trim();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    static string? ReadEnvValue(string path, params string[] names)
+    {
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            foreach (var raw in File.ReadLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#')) continue;
+                if (line.StartsWith("export ", StringComparison.OrdinalIgnoreCase))
+                    line = line[7..].TrimStart();
+
+                var index = line.IndexOf('=');
+                if (index <= 0) continue;
+
+                var key = line[..index].Trim();
+                if (!names.Any(name => string.Equals(name, key, StringComparison.OrdinalIgnoreCase))) continue;
+
+                var value = line[(index + 1)..].Trim();
+                if (value.Length >= 2
+                    && ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\'')))
+                {
+                    value = value[1..^1];
+                }
+
+                if (value.Length > 0) return value;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    static bool SameProxy(string? configured, string listenUrl)
+    {
+        if (!Uri.TryCreate(configured, UriKind.Absolute, out var candidate)) return false;
+        if (!Uri.TryCreate(listenUrl, UriKind.Absolute, out var expected)) return false;
+        return candidate.Scheme.Equals(expected.Scheme, StringComparison.OrdinalIgnoreCase)
+            && candidate.Host.Equals(expected.Host, StringComparison.OrdinalIgnoreCase)
+            && candidate.Port == expected.Port;
     }
 
     static string FormatMb(long bytes) => (bytes / 1024d / 1024d).ToString("0.00");
@@ -195,7 +433,7 @@ public partial class MainWindow : Window
             var loaded = result.Snapshot;
 
             snapshot = loaded;
-            DbPathText.Text = loaded.DbPath;
+            SetPathText(DbPathText, loaded.DbPath);
 
             if (loaded.Signature != signature)
             {
@@ -212,7 +450,7 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            StatusText.Text = $"ошибка: {error.Message}";
+            SetStatusText(StatusText, $"ошибка: {error.Message}");
         }
         finally
         {
@@ -224,18 +462,18 @@ public partial class MainWindow : Window
     {
         if (!string.IsNullOrWhiteSpace(result.StatusNote))
         {
-            StatusText.Text = result.StatusNote;
+            SetStatusText(StatusText, result.StatusNote);
             return;
         }
 
         var requests = loaded.Sessions.Sum(session => session.Requests.Count);
-        StatusText.Text = !string.IsNullOrWhiteSpace(loaded.LoadError)
+        SetStatusText(StatusText, !string.IsNullOrWhiteSpace(loaded.LoadError)
             ? $"загрузка: {loaded.LoadError} · сессий {loaded.Sessions.Count} · запросов {requests}"
-            : $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}";
+            : $"сессий {loaded.Sessions.Count} · запросов {requests} · обновлено {loaded.LoadedAt:HH:mm:ss}");
     }
 
     void ApplyTreeHint(IDataProvider provider, ProviderResult result) =>
-        TreeHint.Text = result.TreeHint ?? provider.TreeHint;
+        SetHintText(TreeHint, result.TreeHint ?? provider.TreeHint);
 
     void ApplyBudget(BudgetUiModel model)
     {
@@ -248,9 +486,9 @@ public partial class MainWindow : Window
             _ => BudgetNormal,
         };
 
-        BudgetDetail.Text = model.Detail;
-        BudgetText.ToolTip = model.Tooltip;
-        BudgetDetail.ToolTip = model.Tooltip;
+        BudgetDetail.Text = Compact(model.Detail ?? string.Empty, BudgetDetailChars);
+        SetTooltip(BudgetDetail, string.IsNullOrWhiteSpace(model.Tooltip) ? model.Detail : model.Tooltip);
+        SetTooltip(BudgetText, model.Tooltip);
     }
 
     void RebuildTree(DataSnapshot loaded)
@@ -336,7 +574,7 @@ public partial class MainWindow : Window
 
     void UpdateLive(DataSnapshot loaded)
     {
-        LivePathText.Text = loaded.EventsPath;
+        SetHintText(LivePathText, loaded.EventsPath);
 
         var key = loaded.Live.Count + "|" + (loaded.Live.Count == 0 ? string.Empty : loaded.Live[^1].Time.Ticks.ToString());
         if (key == liveKey) return;
@@ -374,7 +612,30 @@ public partial class MainWindow : Window
             .OrderByDescending(session => session.MaxContext)
             .ToList();
 
-        if (contextHits.Count > 0)
+        if (loaded.ContextWindow > 0)
+        {
+            // Для источников с известной ёмкостью окна (DSH: 1M) абсолютные 150k
+            // бессмысленны — предупреждаем о проценте заполнения (PLAN §7.7).
+            const double warningPercent = 85;
+            var byPercent = sessions
+                .Where(session => session.MaxContext * 100.0 / loaded.ContextWindow >= warningPercent)
+                .OrderByDescending(session => session.MaxContext)
+                .ToList();
+
+            if (byPercent.Count > 0)
+            {
+                var top = byPercent[0];
+                var topPercent = top.MaxContext * 100.0 / loaded.ContextWindow;
+                alerts.Add(new AlertInfo
+                {
+                    Text = $"Контекст ≥ {warningPercent:0}% окна: {byPercent.Count} сесс. · {topPercent:0.0}% ({Fmt.Tokens(top.MaxContext)} из {Fmt.Tokens(loaded.ContextWindow)}) · {SessionLabel(top)}",
+                    Detail = AlertDetails(byPercent.Select(session =>
+                        $"{SessionLabel(session)}: {session.MaxContext * 100.0 / loaded.ContextWindow:0.0}% ({Fmt.Tokens(session.MaxContext)})")),
+                    Critical = topPercent >= 95,
+                });
+            }
+        }
+        else if (contextHits.Count > 0)
         {
             var top = contextHits[0];
             alerts.Add(new AlertInfo
@@ -538,7 +799,7 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            StatusText.Text = $"не удалось открыть конфиг: {error.Message}";
+            SetStatusText(StatusText, $"не удалось открыть конфиг: {error.Message}");
         }
     }
 
@@ -552,7 +813,7 @@ public partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            StatusText.Text = $"не удалось открыть конфиг: {error.Message}";
+            SetStatusText(StatusText, $"не удалось открыть конфиг: {error.Message}");
         }
     }
 
@@ -599,7 +860,7 @@ public partial class MainWindow : Window
 
         if (!Directory.Exists(session.Directory))
         {
-            StatusText.Text = $"нет каталога: {session.Directory}";
+            SetStatusText(StatusText, $"нет каталога: {session.Directory}");
             return;
         }
 
@@ -614,13 +875,13 @@ public partial class MainWindow : Window
                 Arguments = arguments,
             });
 
-            StatusText.Text = fork
+            SetStatusText(StatusText, fork
                 ? $"открыта копия сессии {session.Id} в терминале"
-                : $"сессия {session.Id} открыта в терминале";
+                : $"сессия {session.Id} открыта в терминале");
         }
         catch (Exception error)
         {
-            StatusText.Text = $"не удалось запустить opencode: {error.Message}";
+            SetStatusText(StatusText, $"не удалось запустить opencode: {error.Message}");
         }
     }
 
@@ -631,11 +892,11 @@ public partial class MainWindow : Window
         try
         {
             Clipboard.SetText(session.Id);
-            StatusText.Text = $"ID скопирован: {session.Id}";
+            SetStatusText(StatusText, $"ID скопирован: {session.Id}");
         }
         catch (Exception error)
         {
-            StatusText.Text = $"не удалось скопировать ID: {error.Message}";
+            SetStatusText(StatusText, $"не удалось скопировать ID: {error.Message}");
         }
     }
 
@@ -762,8 +1023,8 @@ public partial class MainWindow : Window
     void ApplySourceChrome()
     {
         var provider = CurrentProvider;
-        DbPathText.Text = provider.PathText;
-        TreeHint.Text = provider.TreeHint;
+        SetPathText(DbPathText, provider.PathText);
+        SetHintText(TreeHint, provider.TreeHint);
         ConfigLink.ToolTip = provider.Config.ConfigPath;
     }
 }

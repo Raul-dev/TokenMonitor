@@ -1,0 +1,17 @@
+# Патч бандла @local/dsh-token-logger: вставляет одну host-only строку.
+# Любое поле config можно переопределить в профиле
+# (%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml) по id token-logger.
+- insert:
+    - id: token-logger
+      name: '@local/dsh-token-logger'
+      config:
+        capture: full
+        captureText: preview
+        previewChars: 200
+        backfillOnStart: true
+        backfillLimit: 50
+        flushIntervalMs: 250
+        flushMaxEvents: 200
+        retentionDays: 0
+        journalMode: wal
+        verbose: false

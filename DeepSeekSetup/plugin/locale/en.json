@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Token logger",
+    "description": "Records per-step token usage, context pressure, retries, and tool timings from every DeepSeek Harness session into a local SQLite database that TokenMonitor reads.",
+    "detail": "docs/DETAIL.md"
+  }
+}

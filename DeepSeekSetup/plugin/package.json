@@ -1,0 +1,29 @@
+{
+  "name": "@local/dsh-token-logger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Records per-step DeepSeek Harness token usage, context pressure, retries, and tool timings into a local SQLite database read by TokenMonitor.",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "src",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "test"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.3 <0.3.0"
+  }
+}

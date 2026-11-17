@@ -1,4 +1,4 @@
-﻿<Window x:Class="TokenMonitor.MainWindow"
+<Window x:Class="TokenMonitor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:TokenMonitor"
@@ -62,9 +62,9 @@
         <Border DockPanel.Dock="Top" Background="White" BorderBrush="#E3E6EA" BorderThickness="0,0,0,1" Padding="16,8">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" MinWidth="200" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" MinWidth="220" />
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -85,16 +85,22 @@
                             </ComboBox>
                         </Border>
                         <TextBlock x:Name="ProxyTrafficText" Margin="8,0,0,0" VerticalAlignment="Center"
-                                   FontSize="10" Foreground="#6B7280" Visibility="Collapsed" Text="" />
+                                   FontSize="10" Foreground="#6B7280" Visibility="Collapsed" Text=""
+                                   ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="60000" />
                     </StackPanel>
-                    <TextBlock x:Name="DbPathText" FontSize="10" Foreground="#8A8F98" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="DbPathText" FontSize="10" Foreground="#8A8F98" TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap" MaxWidth="520"
+                               ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="60000" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0">
                     <TextBlock x:Name="BudgetText" FontSize="24" FontWeight="SemiBold" Foreground="#111827"
-                               HorizontalAlignment="Center" Text="—" />
+                               HorizontalAlignment="Center" Text="—" MaxWidth="240" TextTrimming="CharacterEllipsis"
+                               ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="60000" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                        <TextBlock x:Name="BudgetDetail" FontSize="11" Foreground="#6B7280" Text="" />
+                        <TextBlock x:Name="BudgetDetail" FontSize="11" Foreground="#6B7280" Text=""
+                                   MaxWidth="300" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                   ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="60000" />
                         <TextBlock FontSize="11" Foreground="#C3C7CD" Text="  ·  " />
                         <TextBlock FontSize="11">
                             <Hyperlink x:Name="ConfigLink" Click="ConfigLink_Click" Foreground="#2563EB">конфиг</Hyperlink>
@@ -103,7 +109,9 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
-                    <TextBlock x:Name="StatusText" FontSize="11" Foreground="#6B7280" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <TextBlock x:Name="StatusText" FontSize="11" Foreground="#6B7280" VerticalAlignment="Center" Margin="0,0,10,0"
+                               MaxWidth="320" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" TextAlignment="Right"
+                               ToolTipService.InitialShowDelay="300" ToolTipService.ShowDuration="60000" />
                     <StackPanel Orientation="Vertical">
                         <Button x:Name="RefreshButton" Content="Обновить" Padding="14,5" Click="RefreshButton_Click" />
                         <TextBlock FontSize="11" HorizontalAlignment="Center" Margin="0,4,0,0">
@@ -207,7 +215,8 @@
                         </Grid>
                     </Border>
                     <TextBlock DockPanel.Dock="Bottom" x:Name="TreeHint" Text="Кликните по сессии, чтобы увидеть детализацию. Правый клик — открыть сессию в OpenCode."
-                               FontSize="10" Foreground="#8A8F98" Margin="12,6,12,8" />
+                               FontSize="10" Foreground="#8A8F98" Margin="12,6,12,8"
+                               TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                     <TreeView x:Name="SessionsTree"
                               BorderThickness="0"
                               Background="Transparent"

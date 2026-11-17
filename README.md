@@ -33,13 +33,22 @@ WPF-приложение для контроля расхода токенов o
 бюджет подхватится автоматически (режим `Auto`), а LiteLLM останется запасным источником.
 Подробнее — в разделе [«Бюджет и настройки»](#бюджет-и-настройки).
 
-4. Установите плагины OpenCode (OpenCode должен хотя бы раз запускаться) и перезапустите его:
+4. Установите плагины (OpenCode должен хотя бы раз запускаться) и перезапустите его:
 
 ```powershell
-.\install.ps1
+.\install.ps1 -OpenCode     # только плагины opencode
+.\install.ps1 -DeepSeek     # только плагин DeepSeek Harness
+.\install.ps1 -All          # всё
+.\install.ps1               # справка по параметрам
 ```
 
+Без параметров `install.ps1` только показывает назначение параметров. Проверка установки —
+`.\install.ps1 -Check -All`, удаление — `.\install.ps1 -Uninstall -OpenCode -Force`.
+
 Бюджет появится в верхней полосе, история и живая лента — из данных OpenCode.
+
+> Плагин DeepSeek ставится в профиль `desktop` DeepSeek Harness и требует, чтобы DSH Desktop
+> хотя бы раз запускался. Подробнее — [`DeepSeekSetup/README.md`](DeepSeekSetup/README.md).
 
 ## Прокси для OpenCode
 
@@ -179,6 +188,7 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 | База opencode | `%USERPROFILE%\.local\share\opencode\opencode.db` | история: сессии, сообщения, шаги, токены |
 | Живая лента | `%USERPROFILE%\.local\share\opencode\token-events.jsonl` | по одной строке JSON на завершённый запрос (пишет плагин) |
 | Резервный лог | `%USERPROFILE%\.local\share\opencode\token-stats.log` | человекочитаемый лог плагина; используется, если `token-events.jsonl` ещё нет |
+| DeepSeek Harness | `%USERPROFILE%\.dsh\tokens\tokens.db` | пошаговая телеметрия токенов DSH (пишет плагин `@local/dsh-token-logger`) |
 
 Другой каталог можно указать переменной окружения:
 
@@ -199,6 +209,44 @@ $env:OPENCODE_DATA_DIR = "D:\other\opencode-data"
 Приложение определяет схему автоматически. Для 2.x живая лента синтезируется из самой базы
 (плагин `token-stats.ts` собран под SDK 1.x и с opencode 2.x не работает — `token-events.jsonl`
 может отсутствовать или устареть, на счётчики это не влияет).
+
+## Источник DeepSeek Harness
+
+Пятый источник данных — агент **DeepSeek Harness (DSH)**. Сам DSH хранит журналы сессий в
+zstd-JSONL и не отдаёт производных метрик, поэтому телеметрию собирает host-плагин
+`@local/dsh-token-logger` (`DeepSeekSetup\plugin`), а TokenMonitor читает его SQLite-базу
+только на чтение (`PRAGMA query_only = 1`).
+
+```text
+Plugin Manager → Add plugin (или plugin_manager → install_bundle)
+путь: D:\Work\MyGit\TokenMonitor\DeepSeekSetup\plugin
+```
+
+| Что | Откуда |
+| --- | --- |
+| База | `%DSH_HOME%\tokens\tokens.db` (`DSH_HOME` по умолчанию `%USERPROFILE%\.dsh`) |
+| Контракт чтения | представления `v_session_summary`, `v_turn_summary`, `v_step_feed`, `v_ingest_health` |
+| Схема | `DeepSeekSetup\schema.sql`, `schema_version = 1` |
+
+Плагин пишет на каждый шаг провайдерский `usage` (вход — **некэшированный**, отдельно
+`cache read`/`write`), полный размер промпта, ёмкость окна, длительность и TTFT, попытки,
+ретраи, вызовы инструментов с длительностью и ошибками, границы ходов и причину их
+завершения. Историю за прошлые сессии он догоняет через публичный `ctx.sessionPersistence`
+идемпотентно — повторный запуск не создаёт дублей.
+
+Бюджет в верхней полосе для DeepSeek — не деньги (у маршрута `deepseek-account` нет API
+стоимости), а токены за текущий месяц, кэш-хит и заполненность контекстного окна; алерты
+по контексту считаются в процентах от `context_window` (1 048 576 для `deepseek-flash`).
+
+Подробности: `DeepSeekSetup\PLAN.md` (план и приёмка), `DeepSeekSetup\FACTS.md`
+(проверенные API DSH), `DeepSeekSetup\plugin\docs\DETAIL.md` (страница плагина).
+
+Чтобы направить трафик DSH через локальный прокси TokenMonitor, отдельный плагин не нужен:
+DSH читает стандартные `HTTPS_PROXY`/`HTTP_PROXY` из `%USERPROFILE%\.dsh\.env` (прокси
+применяется при старте). Пошагово — в [`DeepSeekSetup/README.md`](DeepSeekSetup/README.md#прокси-для-deepseek-harness).
+
+Следующий шаг (ТЗ готово): показывать в верхней полосе реальный расход и баланс аккаунта
+DeepSeek — [`DeepSeekSetup/TZ_ACCOUNT_USAGE.md`](DeepSeekSetup/TZ_ACCOUNT_USAGE.md).
 
 ## Плагин статистики OpenCode
 
@@ -352,6 +400,12 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
     "IsEnabled": true,
     "ApiKey": "",
     "OrgId": ""
+  },
+  "DeepSeek": {
+    "Name": "DeepSeek",
+    "ConfigPath": "C:\\Users\\<user>\\.dsh\\profiles\\desktop\\cordis.patch.yml",
+    "IsEnabled": true,
+    "DbPath": "C:\\Users\\<user>\\.dsh\\tokens\\tokens.db"
   }
 }
 ```
@@ -365,6 +419,8 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
 - `OpenCode.ConfigPath` — откуда читать ключ, если `LiteLLMApiKey` пуст.
 - `Cursor.StateDbPath` / `Cursor.EventsPath` — пути Cursor; пусто = значения по умолчанию.
 - `Devin.ApiKey` / `Devin.OrgId` — доступ к Devin API v3.
+- `DeepSeek.DbPath` — база плагина `@local/dsh-token-logger`; `DeepSeek.ConfigPath` — патч
+  профиля DSH, где настраивается сборщик (`Links → конфиг`).
 - `BudgetRefreshSeconds` — как часто перезапрашивать бюджет (кнопка «Обновить» запрашивает сразу).
 - `LocalProxyServerEnabled` — запускать локальный прокси TokenMonitor.
 - `ProxySettings.ListenUrl` — адрес локального прокси; `UpstreamUrl` — внешний прокси для него
@@ -415,8 +471,9 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
 | --- | --- |
 | `App.xaml`, `App.xaml.cs` | точка входа, режим `--dump` |
 | `MainWindow.xaml`, `MainWindow.xaml.cs` | интерфейс, автообновление, карточки, дерево |
-| `DataProviders\` | стратегии источников: `IDataProvider`, `DataProviderFactory`, `OpenCode/Cursor/Devin/ClaudeDataProvider`, `BudgetUiModel` |
+| `DataProviders\` | стратегии источников: `IDataProvider`, `DataProviderFactory`, `OpenCode/Cursor/Devin/Claude/DeepSeekDataProvider`, `BudgetUiModel` |
 | `OpenCodeStore.cs` | чтение `opencode.db` и логов, парсинг JSONL/лога |
+| `DeepSeekStore.cs` | чтение `tokens.db` плагина DeepSeek через представления `v_*` |
 | `CursorStore.cs`, `CursorClient.cs` | история и лимиты Cursor |
 | `DevinStore.cs`, `DevinClient.cs` | метрики Devin API v3 |
 | `Models.cs` | модели сессий/запросов/шагов и элементов дерева |
@@ -424,7 +481,7 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
 | `AppSettings.cs` | конфиг приложения (settings.json) |
 | `BudgetService.cs` | выбор источника бюджета, LiteLLM `/key/info` |
 | `OpenCodeBudgetProvider.cs` | бюджет OpenCode Go/Console (служба, SQLite-ключ, прямой API) |
-| `install.ps1` | установка/обновление/проверка/удаление плагинов в opencode |
+| `install.ps1` | установка/обновление/проверка/удаление плагинов opencode и DeepSeek Harness (параметры `-OpenCode`, `-DeepSeek`, `-All`, `-Check`, `-Uninstall`); без параметров — справка |
 | `OpenCodeSetup\token-stats.ts` | эталонная копия плагина статистики |
 | `OpenCodeSetup\proxy.ts` | эталонная копия прокси-плагина |
 | `run.ps1` | сборка при необходимости и запуск |

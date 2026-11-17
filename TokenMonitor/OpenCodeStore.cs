@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -17,6 +17,9 @@ public sealed class DataSnapshot
     public string LogPath { get; init; } = string.Empty;
     public DateTime LoadedAt { get; init; }
     public string LoadError { get; init; } = string.Empty;
+
+    /// <summary>Ёмкость контекстного окна источника (0 — неизвестна, алерты по абсолюту).</summary>
+    public long ContextWindow { get; init; }
 
     public static DataSnapshot Empty(string dbPath = "", string loadError = "") => new()
     {

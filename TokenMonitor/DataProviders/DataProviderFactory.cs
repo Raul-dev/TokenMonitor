@@ -8,5 +8,6 @@ public static class DataProviderFactory
         [DataSource.Cursor] = new CursorDataProvider(settings),
         [DataSource.Claude] = new ClaudeDataProvider(settings),
         [DataSource.Devin] = new DevinDataProvider(settings),
+        [DataSource.DeepSeek] = new DeepSeekDataProvider(settings),
     };
 }

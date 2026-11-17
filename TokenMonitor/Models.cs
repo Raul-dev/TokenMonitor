@@ -158,7 +158,7 @@ public sealed class LiveEvent
     public string BilledText => Fmt.Tokens(Billed);
     public string DurationText => Fmt.Duration(DurationMs);
     public string StepsText => Steps.ToString();
-    public string SessionText => SessionId.Replace("ses_", "");
+    public string SessionText => SessionId.Replace("ses_", "").Replace("session-", "");
     public string CacheHitText => new TokenCounts(Input, Output, Reasoning, CacheRead, CacheWrite).CacheHitText;
     public string ExactText =>
         $"запрос: {Time:dd.MM.yyyy HH:mm:ss}\n" +
