@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "biz_code": 0,
+    "biz_msg": "",
+    "biz_data": {
+      "normal_wallets": [
+        { "currency": "USD", "balance": "9.0830245000000000", "token_estimation": "0" }
+      ],
+      "bonus_wallets": [
+        { "currency": "USD", "balance": "0", "token_estimation": "0" }
+      ],
+      "total_costs": [
+        { "currency": "USD", "amount": "0.9169755000000000" }
+      ]
+    }
+  }
+}

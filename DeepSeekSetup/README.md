@@ -14,6 +14,7 @@
 | [`TZ_ACCOUNT_USAGE.md`](TZ_ACCOUNT_USAGE.md) | **ТЗ следующей сессии:** реальный usage аккаунта DeepSeek (расход, баланс, токены) в верхней полосе TokenMonitor — проверенные эндпоинты, схемы, настройки, приёмка |
 | [`plugin/`](plugin/) | **Реализация:** host-only бандл `@local/dsh-token-logger` (live-индексация, backfill, SQLite), локаль/иконка/DETAIL и тесты |
 | [`tools/`](tools/) | Диагностика: разбор журнала DSH (`inspect-journal.mjs`), сверка чисел (`verify-real.mjs`), запросы к `tokens.db` (`query-db.mjs`), приёмочный запуск C#-store (`StoreCheck`), поиск настроек прокси в установленных пакетах DSH (`asar-search.mjs`, `search-proxy.mjs`) |
+| [`tools/AccountCheck/`](tools/AccountCheck/) | Приёмка бюджета аккаунта: живой запрос к `platform.deepseek.com`, офлайн-фикстуры и предпросмотр шапки |
 
 ## Коротко о решении
 
@@ -112,12 +113,96 @@ HTTP_PROXY=http://127.0.0.1:8181
 Отключить: удалите строки из `%USERPROFILE%\.dsh\.env` (или задайте `NO_PROXY=*`) и
 перезапустите DeepSeek Harness.
 
+## Реальный usage аккаунта DeepSeek
+
+Бюджет в верхней полосе для источника DeepSeek показывает **деньги аккаунта**
+`platform.deepseek.com`, а не локальный подсчёт токенов
+([`TZ_ACCOUNT_USAGE.md`](TZ_ACCOUNT_USAGE.md)):
+
+```
+$1,04 / $10,00                      ← крупно: потрачено за месяц / всего было на счету
+осталось $8,96 · 472 запр.  ·  конфиг  ← мелко: остаток и число запросов
+```
+
+- **потрачено** — сумма `usage/cost` за текущий месяц (без `REQUEST`);
+- **всего было** — баланс (оплачено + бонусы) плюс израсходованное по данным платформы;
+  можно зафиксировать вручную: `DeepSeekAccount.TotalBudget` (например, сумма пополнения);
+- **осталось** — текущий баланс аккаунта, в его валюте (`$`, `¥`, иначе код валюты);
+- цвет: серый — данных нет, жёлтый — остаток ≤ `LowBalanceWarning`, красный — ≤
+  `LowBalanceCritical` или баланс исчерпан;
+- tooltip: валюта, расход и баланс с точными суммами (оплачено/бонусы), запросы, токены
+  cache hit / cache miss / output, разбивка по моделям и время обновления.
+
+Отдельный API key **не нужен**: используется тот же grant DSH
+(`deepseek-account-platform/default` из `%DSH_HOME%\.credentials.yaml`), запросы идут с
+заголовком `x-dsh-auth-token`. Токен читается только в память на время запроса, не
+попадает в `settings.json`, логи и tooltip; файл credentials открывается только на чтение
+и никогда не изменяется.
+
+### Настройки
+
+```json
+"DeepSeekAccount": {
+  "Enabled": true,
+  "PlatformOrigin": "https://platform.deepseek.com",
+  "CredentialsPath": "",
+  "TokenEnvironmentVariable": "DEEPSEEK_PLATFORM_TOKEN",
+  "RefreshSeconds": 300,
+  "LowBalanceWarning": 1.0,
+  "LowBalanceCritical": 0.1,
+  "TotalBudget": 0
+}
+```
+
+| Поле | Смысл |
+|---|---|
+| `Enabled` | `false` — бюджет считается локально по `tokens.db` (как раньше), сеть не используется |
+| `PlatformOrigin` | база Platform API; только `https` (http допустим лишь для loopback) |
+| `CredentialsPath` | путь к `.credentials.yaml`; пусто = `%DSH_HOME%\.credentials.yaml` |
+| `TokenEnvironmentVariable` | env-переменная с токеном — приоритетнее файла |
+| `RefreshSeconds` | TTL снимка, 60…3600 (значения меньше поднимаются до 60) |
+| `LowBalanceWarning` / `LowBalanceCritical` | пороги «заканчивается» / «критично» по остатку |
+| `TotalBudget` | «всего было» вручную; `0` — баланс + расход по данным платформы |
+
+UI обновляется каждые 5 с, но сетевые запросы — не чаще `RefreshSeconds`; кнопка
+«Обновить» обходит TTL, но не чаще раза в 60 с. Параллельных запросов нет: второй
+вызывающий ждёт тот же запрос. При сетевой ошибке до 15 минут показывается последний
+успешный снимок с пометкой «устарело»; при `40002`/`40003` — сразу «сессия DeepSeek
+истекла — войдите в DeepSeek Harness» (grant не трогается).
+
+### Приёмка
+
+```powershell
+dotnet run --project DeepSeekSetup\tools\AccountCheck            # живой запрос: расход/баланс/токены
+dotnet run --project DeepSeekSetup\tools\AccountCheck -- --twice  # кэш: 3 HTTP-запроса, повтор из кэша
+dotnet run --project DeepSeekSetup\tools\AccountCheck -- --self-test   # фикстуры, credentials, шапка
+dotnet run --project DeepSeekSetup\tools\AccountCheck -- --budget      # офлайн-предпросмотр шапки
+```
+
+Exit code `0` — успех/все проверки прошли. `--direct` игнорирует прокси из `settings.json`,
+`--origin`/`--credentials` подменяют базу API и файл grant'а.
+
+Если живой запрос падает с `Network`/`The SSL connection could not be established`:
+
+- проверьте `ProxySettings` в `%APPDATA%\TokenMonitor\settings.json` — при `407` прокси
+  требует верные креды (для проверки запустите `AccountCheck --direct`);
+- в песочнице/ограниченной учётной записи Windows без доступа к хранилищу сертификатов
+  TLS не работает вообще (даже `https://example.com`) — запускайте `AccountCheck` из
+  обычного PowerShell.
+
+### Отличия от ТЗ
+
+Пункт `Show` (`Spend`/`Balance`) из §5 ТЗ не вводился: по решению для шапки выводятся
+оба числа сразу — потрачено и «всего было», — а остаток показывается мелкой строкой.
+Остальное соответствует ТЗ; `DeepSeekStore`, `BudgetUiModel` и `IDataProvider` не менялись.
+
 ## С чего начать
 
 1. Прочитать `PLAN.md` §1–4 (цель и архитектура) и §13 (что уже реализовано).
 2. Установить плагин и открыть источник DeepSeek в TokenMonitor — см. «Установка и настройка».
 3. При необходимости направить трафик DSH через локальный прокси — см. выше.
-4. Следующая сессия: реальный usage аккаунта в шапке — [`TZ_ACCOUNT_USAGE.md`](TZ_ACCOUNT_USAGE.md).
+4. Реальный usage аккаунта в шапке — реализовано, см. «Реальный usage аккаунта DeepSeek»;
+   спецификация и остаток работ (P2) — [`TZ_ACCOUNT_USAGE.md`](TZ_ACCOUNT_USAGE.md).
 5. Открытые вопросы и опциональный этап P4 — `PLAN.md` §11 и §13.
 
 ## Что уже проверено
@@ -142,8 +227,14 @@ HTTP_PROXY=http://127.0.0.1:8181
       курсоры, `ingest_runs`, идемпотентность (тест + повторный прогон), retention-настройка.
 - [x] **P3.** TokenMonitor: `DataSource.DeepSeek`, `DeepSeekStore`, `DeepSeekDataProvider`,
       фабрика, бюджет-токены, алерты по % окна; `dotnet build` зелёный.
-- [ ] **P4 (по желанию).** `TryLaunch`/«Открыть папку сессии», раскладка `compaction/*`
-      в таблицу `compactions`, `projected_tokens` из `ctx.tokenMeter`.
+- [x] **P4.** Бюджет аккаунта (`TZ_ACCOUNT_USAGE` P1.1–P1.5): `DeepSeekCredentials`,
+      `DeepSeekAccountUsage`/парсеры, `DeepSeekAccountClient`, `DeepSeekAccountSettings`,
+      `Fmt.Money`, `AccountCheck` + фикстуры. Живой прогон: 17.11.2026 —
+      `$1,04 / $10,00`, осталось `$8,96`, 472 запроса, cache hit 97 541 248;
+      `AccountCheck --self-test` — все проверки прошли.
+- [ ] **P5 (по желанию).** `TryLaunch`/«Открыть папку сессии», раскладка `compaction/*`
+      в таблицу `compactions`, `projected_tokens` из `ctx.tokenMeter`; точный «сегодня» по
+      локальной таймзоне через `usage/export` (P2 в ТЗ).
 
 ## Как проверено
 
@@ -154,3 +245,6 @@ HTTP_PROXY=http://127.0.0.1:8181
 | Живая установка бандла | `ingest_runs`: live + startup-backfill, 0 ошибок; новая сессия и её шаги появляются в БД без ручных действий |
 | `dotnet run --project tools/StoreCheck` | 3 сессии, 182 шага, живая лента, бюджет `22.35M · кэш 98,8% · контекст 20,2% окна`; отсутствующая БД → «нет данных» без исключения |
 | Запуск `TokenMonitor.exe` с `LastSource=DeepSeek` | 10 с без ошибок в `tokenmonitor-*.log` |
+| `AccountCheck --self-test` | 30 проверок: разбор фикстур, коды 40003/40001/неизвестная схема, выбор grant'а (default/чужой issuer/ambiguous), формат шапки `$0,92 / $10,00`, stale и низкий баланс |
+| `AccountCheck` на живом аккаунте (17.11.2026) | `$1,0364574` за ноябрь, баланс `$8,9590426`, всего было `$10,00`, 472 запроса, 97 541 248 cache hit / 470 170 miss / 358 034 output |
+| `AccountCheck --twice` | 3 HTTP-запроса на первый вызов, второй — из кэша (0 новых) |

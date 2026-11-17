@@ -18,6 +18,39 @@ public static class Fmt
 
     public static string Exact(long value) => value.ToString("N0", Inv);
 
+    /// <summary>
+    /// Сумма в валюте аккаунта: «$0,92», «¥12,30», «EUR 3,00».
+    /// Два знака — для шапки и коротких подписей; полное значение — <see cref="MoneyExact"/>.
+    /// </summary>
+    public static string Money(decimal value, string? currency) => Compose(value, "0.00", currency);
+
+    /// <summary>Сумма без округления до копеек — для tooltip (минимум 2 знака, до 9).</summary>
+    public static string MoneyExact(decimal value, string? currency) => Compose(value, "0.00#######", currency);
+
+    /// <summary>Символ валюты: $ для USD, ¥ для CNY/RMB, иначе код валюты с пробелом.</summary>
+    public static string Sign(string? currency)
+    {
+        var code = (currency ?? string.Empty).Trim().ToUpperInvariant();
+        return code switch
+        {
+            "" => "",
+            "USD" or "$" => "$",
+            "CNY" or "RMB" or "YUAN" or "¥" => "¥",
+            "EUR" or "€" => "€",
+            _ => code + " ",
+        };
+    }
+
+    static string Compose(decimal value, string format, string? currency)
+    {
+        var symbol = Sign(currency);
+        return value < 0 ? "-" + symbol + Number(-value, format) : symbol + Number(value, format);
+    }
+
+    static string Number(decimal value, string format) =>
+        value.ToString(format, Inv).Replace('.', ',');
+
+
     public static string Duration(long ms)
     {
         if (ms <= 0) return "—";

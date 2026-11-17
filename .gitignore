@@ -19,3 +19,5 @@ rootCA
 *.dbmdl
 GenTestOutput.xml
 appsettings_local.json
+.build
+.acl-recovery

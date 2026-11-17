@@ -78,6 +78,9 @@ public sealed class AppSettings
     public bool LocalProxyServerEnabled { get; set; }
     public ProxySettings ProxySettings { get; set; } = new();
 
+    /// <summary>Реальный usage аккаунта platform.deepseek.com (TZ_ACCOUNT_USAGE).</summary>
+    public DeepSeekAccountSettings DeepSeekAccount { get; set; } = new();
+
     // Конфигурации провайдеров
     public ProviderConfig OpenCode { get; set; } = new()
     {
@@ -160,6 +163,9 @@ public static class SettingsStore
     /// <summary>База, которую пишет плагин @local/dsh-token-logger.</summary>
     public static string DefaultDeepSeekDbPath => Path.Combine(DshHome, "tokens", "tokens.db");
 
+    /// <summary>Credentials DSH с grant'ом DeepSeek-аккаунта.</summary>
+    public static string DefaultDeepSeekCredentialsPath => Path.Combine(DshHome, ".credentials.yaml");
+
     public static string SettingsDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TokenMonitor");
 
@@ -173,9 +179,16 @@ public static class SettingsStore
             var settings = JsonSerializer.Deserialize<AppSettings>(json);
             if (settings is not null)
             {
+                var hadAccountSection = HasProperty(json, nameof(AppSettings.DeepSeekAccount));
+
                 ApplyLegacy(settings, json);
                 Normalize(settings);
                 ApplyRuntime(settings);
+
+                // Новая секция появляется в settings.json сразу, чтобы её можно было
+                // править руками, не угадывая имена полей (TZ §5).
+                if (!hadAccountSection) TrySave(settings);
+
                 return settings;
             }
 
@@ -237,6 +250,8 @@ public static class SettingsStore
         settings.DeepSeek = EnsureProvider(settings.DeepSeek, "DeepSeek", DefaultDeepSeekConfigPath);
         if (string.IsNullOrWhiteSpace(settings.DeepSeek.DbPath))
             settings.DeepSeek.DbPath = DefaultDeepSeekDbPath;
+
+        settings.DeepSeekAccount = DeepSeekAccountSettings.Normalize(settings.DeepSeekAccount);
     }
 
     static void ApplyRuntime(AppSettings settings) =>
@@ -334,6 +349,20 @@ public static class SettingsStore
         }
         catch
         {
+        }
+    }
+
+    static bool HasProperty(string json, string name)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty(name, out _);
+        }
+        catch
+        {
+            return false;
         }
     }
 

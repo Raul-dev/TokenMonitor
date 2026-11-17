@@ -234,19 +234,27 @@ Plugin Manager → Add plugin (или plugin_manager → install_bundle)
 завершения. Историю за прошлые сессии он догоняет через публичный `ctx.sessionPersistence`
 идемпотентно — повторный запуск не создаёт дублей.
 
-Бюджет в верхней полосе для DeepSeek — не деньги (у маршрута `deepseek-account` нет API
-стоимости), а токены за текущий месяц, кэш-хит и заполненность контекстного окна; алерты
-по контексту считаются в процентах от `context_window` (1 048 576 для `deepseek-flash`).
+Бюджет в верхней полосе для DeepSeek — **реальные деньги аккаунта**
+`platform.deepseek.com`: крупно «потрачено за месяц / всего было на счету», мелко —
+остаток и число запросов (`$1,04 / $10,00`, ниже `осталось $8,96 · 472 запр.`). Данные
+берутся тем же grant'ом DSH, что у самого DeepSeek Harness (`x-dsh-auth-token`); в
+tooltip — баланс (оплачено/бонусы), токены cache hit/miss/output и разбивка по моделям.
+Если аккаунт недоступен (нет входа, истёкшая сессия, сеть/прокси), шапка откатывается на
+локальный подсчёт по `tokens.db` — токены за месяц, кэш-хит и заполненность контекстного
+окна; алерты по контексту считаются в процентах от `context_window` (1 048 576 для
+`deepseek-flash`).
 
 Подробности: `DeepSeekSetup\PLAN.md` (план и приёмка), `DeepSeekSetup\FACTS.md`
-(проверенные API DSH), `DeepSeekSetup\plugin\docs\DETAIL.md` (страница плагина).
+(проверенные API DSH), `DeepSeekSetup\plugin\docs\DETAIL.md` (страница плагина),
+[`DeepSeekSetup/README.md`](DeepSeekSetup/README.md#реальный-usage-аккаунта-deepseek)
+(настройки бюджета аккаунта и `AccountCheck`).
 
 Чтобы направить трафик DSH через локальный прокси TokenMonitor, отдельный плагин не нужен:
 DSH читает стандартные `HTTPS_PROXY`/`HTTP_PROXY` из `%USERPROFILE%\.dsh\.env` (прокси
 применяется при старте). Пошагово — в [`DeepSeekSetup/README.md`](DeepSeekSetup/README.md#прокси-для-deepseek-harness).
 
-Следующий шаг (ТЗ готово): показывать в верхней полосе реальный расход и баланс аккаунта
-DeepSeek — [`DeepSeekSetup/TZ_ACCOUNT_USAGE.md`](DeepSeekSetup/TZ_ACCOUNT_USAGE.md).
+Следующий шаг — точный «сегодня» по локальной таймзоне и per-API-key разбивка через
+`usage/export` (P2 в [`DeepSeekSetup/TZ_ACCOUNT_USAGE.md`](DeepSeekSetup/TZ_ACCOUNT_USAGE.md)).
 
 ## Плагин статистики OpenCode
 
@@ -406,6 +414,16 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
     "ConfigPath": "C:\\Users\\<user>\\.dsh\\profiles\\desktop\\cordis.patch.yml",
     "IsEnabled": true,
     "DbPath": "C:\\Users\\<user>\\.dsh\\tokens\\tokens.db"
+  },
+  "DeepSeekAccount": {
+    "Enabled": true,
+    "PlatformOrigin": "https://platform.deepseek.com",
+    "CredentialsPath": "",
+    "TokenEnvironmentVariable": "DEEPSEEK_PLATFORM_TOKEN",
+    "RefreshSeconds": 300,
+    "LowBalanceWarning": 1.0,
+    "LowBalanceCritical": 0.1,
+    "TotalBudget": 0
   }
 }
 ```
@@ -421,6 +439,12 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
 - `Devin.ApiKey` / `Devin.OrgId` — доступ к Devin API v3.
 - `DeepSeek.DbPath` — база плагина `@local/dsh-token-logger`; `DeepSeek.ConfigPath` — патч
   профиля DSH, где настраивается сборщик (`Links → конфиг`).
+- `DeepSeekAccount` — бюджет в шапке по реальному аккаунту `platform.deepseek.com`:
+  `Enabled` (false = прежний локальный подсчёт), `CredentialsPath` (пусто =
+  `%DSH_HOME%\.credentials.yaml`), `TokenEnvironmentVariable` (env важнее файла),
+  `RefreshSeconds` (60…3600), `LowBalanceWarning`/`LowBalanceCritical` (пороги остатка),
+  `TotalBudget` (0 = «всего было» считается как баланс + расход по данным платформы;
+  иначе — заданная вручную сумма пополнений). Токен в `settings.json` не хранится.
 - `BudgetRefreshSeconds` — как часто перезапрашивать бюджет (кнопка «Обновить» запрашивает сразу).
 - `LocalProxyServerEnabled` — запускать локальный прокси TokenMonitor.
 - `ProxySettings.ListenUrl` — адрес локального прокси; `UpstreamUrl` — внешний прокси для него
@@ -474,6 +498,10 @@ TokenMonitor не обновляет OAuth-токен: если он истёк,
 | `DataProviders\` | стратегии источников: `IDataProvider`, `DataProviderFactory`, `OpenCode/Cursor/Devin/Claude/DeepSeekDataProvider`, `BudgetUiModel` |
 | `OpenCodeStore.cs` | чтение `opencode.db` и логов, парсинг JSONL/лога |
 | `DeepSeekStore.cs` | чтение `tokens.db` плагина DeepSeek через представления `v_*` |
+| `DeepSeekAccountClient.cs` | polling `platform.deepseek.com` (баланс, расход, токены), TTL/кэш/stale |
+| `DeepSeekAccountUsage.cs` | доменная модель аккаунта и разбор ответов Platform API |
+| `DeepSeekCredentials.cs` | поиск grant'а DSH в `.credentials.yaml` (без записи и логирования токена) |
+| `DeepSeekAccountSettings.cs` | секция `DeepSeekAccount` настроек и её нормализация |
 | `CursorStore.cs`, `CursorClient.cs` | история и лимиты Cursor |
 | `DevinStore.cs`, `DevinClient.cs` | метрики Devin API v3 |
 | `Models.cs` | модели сессий/запросов/шагов и элементов дерева |

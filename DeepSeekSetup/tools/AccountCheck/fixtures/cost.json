@@ -1,0 +1,26 @@
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "biz_code": 0,
+    "biz_msg": "",
+    "biz_data": [
+      {
+        "total": [
+          {
+            "model": "deepseek-flash",
+            "usage": [
+              { "type": "PROMPT_TOKEN", "amount": "0" },
+              { "type": "PROMPT_CACHE_HIT_TOKEN", "amount": "0.4802688000000000" },
+              { "type": "PROMPT_CACHE_MISS_TOKEN", "amount": "0.1112715000000000" },
+              { "type": "RESPONSE_TOKEN", "amount": "0.3254352000000000" },
+              { "type": "REQUEST", "amount": "0" }
+            ]
+          }
+        ],
+        "days": [],
+        "currency": "USD"
+      }
+    ]
+  }
+}
